@@ -1,0 +1,21 @@
+{
+  "name": "compfest18-softwareengineering",
+  "version": "1.0.0",
+  "description": "Compfest18 Software Engineering",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/celineemercy/Compfest18-SoftwareEngineering.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/celineemercy/Compfest18-SoftwareEngineering/issues"
+  },
+  "homepage": "https://github.com/celineemercy/Compfest18-SoftwareEngineering#readme"
+}
