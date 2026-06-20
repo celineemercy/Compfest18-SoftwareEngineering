@@ -3,8 +3,25 @@
   "version": "1.0.0",
   "description": "Compfest18 Software Engineering",
   "main": "index.js",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f db",
+    "dev:api": "npm --prefix apps/api run start:dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:api": "npm --prefix apps/api run build",
+    "build:web": "npm --prefix apps/web run build",
+    "test:api": "npm --prefix apps/api test",
+    "lint:api": "npm --prefix apps/api run lint",
+    "lint:web": "npm --prefix apps/web run lint",
+    "prisma:generate": "npm --prefix apps/api exec prisma generate",
+    "prisma:migrate": "npm --prefix apps/api exec prisma migrate dev",
+    "setup:check": "docker compose config --quiet"
   },
   "repository": {
     "type": "git",
