@@ -20,6 +20,8 @@ model User {
   password  String
   roles     Role[]
   stores    Store[]
+  wallet    Wallet?
+  addresses Address[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -53,4 +55,33 @@ model Product {
   updatedAt DateTime @updatedAt
 
   @@index([storeId])
+}
+
+model Wallet {
+  id      String @id @default(uuid())
+  userId  String @unique
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Address {
+  id            String  @id @default(uuid())
+  userId        String
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label         String
+  recipientName String
+  phone         String
+  street        String
+  city          String
+  province      String
+  postalCode    String
+  isDefault     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
