@@ -13,6 +13,7 @@ import {
   Pencil,
   PlusCircle,
   RefreshCw,
+  ShoppingCart,
   ShieldCheck,
   Sparkles,
   Star,
@@ -105,8 +106,55 @@ type AddressRecord = {
   updatedAt: string
 }
 
+type CartStore = {
+  id: string
+  name: string
+}
+
+type CartProduct = ProductRecord & {
+  store: CartStore
+}
+
+type CartItemRecord = {
+  id: string
+  productId: string
+  quantity: number
+  snapshotPrice: number
+  lineTotal: number
+  product: CartProduct
+}
+
+type CartRecord = {
+  id: string
+  userId: string
+  storeId: string | null
+  store: CartStore | null
+  items: CartItemRecord[]
+  totalItems: number
+  subtotal: number
+  createdAt: string
+  updatedAt: string
+}
+
+type CartConflictResponse = {
+  message?: string
+  currentStore?: CartStore
+  incomingStore?: CartStore
+}
+
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
+
+class ApiRequestError extends Error {
+  readonly status: number
+  readonly data: unknown
+
+  constructor(message: string, status: number, data: unknown) {
+    super(message)
+    this.status = status
+    this.data = data
+  }
+}
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 
@@ -152,11 +200,13 @@ function App() {
   const [catalogNotice, setCatalogNotice] = useState<Notice>(null)
   const [sellerNotice, setSellerNotice] = useState<Notice>(null)
   const [buyerNotice, setBuyerNotice] = useState<Notice>(null)
+  const [cartNotice, setCartNotice] = useState<Notice>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
   const [isCatalogLoading, setIsCatalogLoading] = useState(false)
   const [isSellerLoading, setIsSellerLoading] = useState(false)
   const [isBuyerLoading, setIsBuyerLoading] = useState(false)
+  const [isCartLoading, setIsCartLoading] = useState(false)
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
   const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState('')
@@ -164,6 +214,8 @@ function App() {
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
   const [wallet, setWallet] = useState<WalletRecord | null>(null)
   const [addresses, setAddresses] = useState<AddressRecord[]>([])
+  const [cart, setCart] = useState<CartRecord | null>(null)
+  const [pendingCartProduct, setPendingCartProduct] = useState<CatalogProduct | null>(null)
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
@@ -189,7 +241,7 @@ function App() {
         data?.message instanceof Array
           ? data.message.join(', ')
           : data?.message || 'Request failed'
-      throw new Error(message)
+      throw new ApiRequestError(message, response.status, data)
     }
 
     return data as T
@@ -281,6 +333,28 @@ function App() {
       setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
     } finally {
       setIsBuyerLoading(false)
+    }
+  }, [authHeaders, request, token])
+
+  const loadCart = useCallback(async function loadCart() {
+    if (!token) {
+      setCartNotice({ kind: 'error', message: 'Login with a buyer account first.' })
+      return
+    }
+
+    setIsCartLoading(true)
+    setCartNotice(null)
+
+    try {
+      const nextCart = await request<CartRecord>('/cart/me', {
+        headers: authHeaders(),
+      })
+      setCart(nextCart)
+      setCartNotice({ kind: 'success', message: 'Cart loaded.' })
+    } catch (error) {
+      setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCartLoading(false)
     }
   }, [authHeaders, request, token])
 
@@ -553,6 +627,134 @@ function App() {
     }
   }
 
+  async function addProductToCart(product: CatalogProduct) {
+    if (!token) {
+      setCartNotice({ kind: 'error', message: 'Login with a buyer account to add products.' })
+      return
+    }
+
+    if (!isBuyer) {
+      setCartNotice({ kind: 'error', message: 'BUYER access is required to use the cart.' })
+      return
+    }
+
+    setIsCartLoading(true)
+    setCartNotice(null)
+    setPendingCartProduct(null)
+
+    try {
+      const nextCart = await request<CartRecord>('/cart/items', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          productId: product.id,
+          quantity: 1,
+        }),
+      })
+      setCart(nextCart)
+      setCartNotice({ kind: 'success', message: `${product.name} added to cart.` })
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        const conflict = error.data as CartConflictResponse
+        setPendingCartProduct(product)
+        setCartNotice({
+          kind: 'error',
+          message: `${conflict.currentStore?.name ?? 'Another store'} is already in your cart. Clear it before adding from ${conflict.incomingStore?.name ?? product.store.name}.`,
+        })
+      } else {
+        setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+      }
+    } finally {
+      setIsCartLoading(false)
+    }
+  }
+
+  async function updateCartItemQuantity(itemId: string, quantity: number) {
+    setIsCartLoading(true)
+    setCartNotice(null)
+
+    try {
+      const nextCart = await request<CartRecord>(`/cart/items/${itemId}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ quantity }),
+      })
+      setCart(nextCart)
+      setCartNotice({ kind: 'success', message: 'Cart quantity updated.' })
+    } catch (error) {
+      setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCartLoading(false)
+    }
+  }
+
+  async function removeCartItem(itemId: string) {
+    setIsCartLoading(true)
+    setCartNotice(null)
+
+    try {
+      const nextCart = await request<CartRecord>(`/cart/items/${itemId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      setCart(nextCart)
+      setCartNotice({ kind: 'success', message: 'Item removed from cart.' })
+    } catch (error) {
+      setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCartLoading(false)
+    }
+  }
+
+  async function clearCart() {
+    setIsCartLoading(true)
+    setCartNotice(null)
+
+    try {
+      const nextCart = await request<CartRecord>('/cart/clear', {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      setCart(nextCart)
+      setPendingCartProduct(null)
+      setCartNotice({ kind: 'success', message: 'Cart cleared.' })
+    } catch (error) {
+      setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCartLoading(false)
+    }
+  }
+
+  async function clearCartAndRetry() {
+    if (!pendingCartProduct) return
+
+    const product = pendingCartProduct
+    setIsCartLoading(true)
+    setCartNotice(null)
+
+    try {
+      await request<CartRecord>('/cart/clear', {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      const nextCart = await request<CartRecord>('/cart/items', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          productId: product.id,
+          quantity: 1,
+        }),
+      })
+      setCart(nextCart)
+      setPendingCartProduct(null)
+      setCartNotice({ kind: 'success', message: `${product.name} added after clearing the cart.` })
+    } catch (error) {
+      setCartNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCartLoading(false)
+    }
+  }
+
   function logout() {
     localStorage.removeItem('accessToken')
     setToken('')
@@ -562,6 +764,8 @@ function App() {
     setSellerProducts([])
     setWallet(null)
     setAddresses([])
+    setCart(null)
+    setPendingCartProduct(null)
     setAuthNotice({ kind: 'success', message: 'Session cleared.' })
   }
 
@@ -656,10 +860,26 @@ function App() {
       </section>
 
       <CatalogSection
+        canAddToCart={Boolean(token && isBuyer)}
         isLoading={isCatalogLoading}
         notice={catalogNotice}
         products={catalogProducts}
+        onAddToCart={addProductToCart}
         onRefresh={loadCatalog}
+      />
+
+      <CartSection
+        cart={cart}
+        isBuyer={isBuyer}
+        isLoading={isCartLoading}
+        notice={cartNotice}
+        pendingProduct={pendingCartProduct}
+        token={token}
+        onClear={clearCart}
+        onClearAndRetry={clearCartAndRetry}
+        onRefresh={loadCart}
+        onRemoveItem={removeCartItem}
+        onUpdateQuantity={updateCartItemQuantity}
       />
 
       <AuthSection
@@ -722,14 +942,18 @@ function App() {
 }
 
 function CatalogSection({
+  canAddToCart,
   isLoading,
   notice,
   products,
+  onAddToCart,
   onRefresh,
 }: {
+  canAddToCart: boolean
   isLoading: boolean
   notice: Notice
   products: CatalogProduct[]
+  onAddToCart: (product: CatalogProduct) => void
   onRefresh: () => void
 }) {
   return (
@@ -772,7 +996,12 @@ function CatalogSection({
         ) : (
           <div className="mt-8 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
             {products.map((product) => (
-              <ProductCard key={product.id} product={product} />
+              <ProductCard
+                key={product.id}
+                canAddToCart={canAddToCart}
+                product={product}
+                onAddToCart={onAddToCart}
+              />
             ))}
           </div>
         )}
@@ -781,7 +1010,15 @@ function CatalogSection({
   )
 }
 
-function ProductCard({ product }: { product: CatalogProduct }) {
+function ProductCard({
+  canAddToCart,
+  product,
+  onAddToCart,
+}: {
+  canAddToCart: boolean
+  product: CatalogProduct
+  onAddToCart: (product: CatalogProduct) => void
+}) {
   return (
     <Card className="overflow-hidden">
       {product.imageUrl ? (
@@ -810,9 +1047,188 @@ function ProductCard({ product }: { product: CatalogProduct }) {
         <p className="min-h-12 text-sm leading-6 text-muted-foreground">
           {product.description || 'No description provided.'}
         </p>
-        <p className="mt-4 text-lg font-semibold">{currency.format(product.price)}</p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-lg font-semibold">{currency.format(product.price)}</p>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => onAddToCart(product)}
+            disabled={!canAddToCart || product.stock < 1}
+          >
+            <ShoppingCart className="h-4 w-4" />
+            Add
+          </Button>
+        </div>
       </CardContent>
     </Card>
+  )
+}
+
+function CartSection({
+  cart,
+  isBuyer,
+  isLoading,
+  notice,
+  pendingProduct,
+  token,
+  onClear,
+  onClearAndRetry,
+  onRefresh,
+  onRemoveItem,
+  onUpdateQuantity,
+}: {
+  cart: CartRecord | null
+  isBuyer: boolean
+  isLoading: boolean
+  notice: Notice
+  pendingProduct: CatalogProduct | null
+  token: string
+  onClear: () => void
+  onClearAndRetry: () => void
+  onRefresh: () => void
+  onRemoveItem: (itemId: string) => void
+  onUpdateQuantity: (itemId: string, quantity: number) => void
+}) {
+  const disabled = !token || !isBuyer || isLoading
+  const items = cart?.items ?? []
+
+  return (
+    <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+        <div>
+          <Badge variant="outline" className="mb-4 gap-1.5">
+            <ShoppingCart className="h-3.5 w-3.5" />
+            Single-store cart
+          </Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">Keep one store per cart.</h2>
+          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+            Cart validation stays strict so checkout can be routed to one seller storefront.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Button variant="outline" onClick={onRefresh} disabled={disabled}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh cart
+          </Button>
+          <Button variant="ghost" onClick={onClear} disabled={disabled || items.length === 0}>
+            Clear cart
+          </Button>
+        </div>
+      </div>
+
+      {!token ? (
+        <Alert className="mt-6">Login with a buyer account to use the cart.</Alert>
+      ) : !isBuyer ? (
+        <Alert className="mt-6" variant="destructive">
+          Your current account does not have BUYER access.
+        </Alert>
+      ) : null}
+
+      {notice && (
+        <Alert className="mt-6" variant={notice.kind === 'success' ? 'success' : 'destructive'}>
+          {notice.message}
+        </Alert>
+      )}
+
+      {pendingProduct && (
+        <Card className="mt-6 border-destructive/40">
+          <CardHeader>
+            <CardTitle>Switch cart store?</CardTitle>
+            <CardDescription>
+              Clear the current cart before adding {pendingProduct.name} from {pendingProduct.store.name}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-3">
+            <Button type="button" onClick={onClearAndRetry} disabled={disabled}>
+              Clear cart and add item
+            </Button>
+            <Button type="button" variant="outline" onClick={onClear} disabled={disabled}>
+              Clear cart only
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>{cart?.store ? `Cart from ${cart.store.name}` : 'Cart is empty'}</CardTitle>
+            <CardDescription>{cart?.totalItems ?? 0} item{cart?.totalItems === 1 ? '' : 's'} selected</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {items.length === 0 ? (
+              <Alert>Add a catalog product to start a single-store cart.</Alert>
+            ) : (
+              <div className="grid gap-3">
+                {items.map((item) => (
+                  <div key={item.id} className="rounded-md border bg-white p-4">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-semibold">{item.product.name}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {currency.format(item.snapshotPrice)} each - stock {item.product.stock}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          aria-label={`Quantity for ${item.product.name}`}
+                          className="w-24"
+                          type="number"
+                          min="1"
+                          max={item.product.stock}
+                          value={item.quantity}
+                          disabled={disabled}
+                          onChange={(event) => {
+                            const quantity = Number(event.target.value)
+                            if (quantity >= 1) {
+                              onUpdateQuantity(item.id, quantity)
+                            }
+                          }}
+                        />
+                        <p className="min-w-24 text-right font-semibold">
+                          {currency.format(item.lineTotal)}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onRemoveItem(item.id)}
+                          disabled={disabled}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Cart summary</CardTitle>
+            <CardDescription>{cart?.store?.name ?? 'No store selected'}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Items</span>
+                <span className="font-medium">{cart?.totalItems ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Subtotal</span>
+                <span className="font-semibold">{currency.format(cart?.subtotal ?? 0)}</span>
+              </div>
+            </div>
+            <Separator className="my-5" />
+            <Alert>Checkout is prepared for the next level.</Alert>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
   )
 }
 
