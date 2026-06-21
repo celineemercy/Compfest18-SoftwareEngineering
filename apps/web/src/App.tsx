@@ -5,10 +5,13 @@ import {
   BadgeCheck,
   CircleDollarSign,
   ClipboardCheck,
+  CreditCard,
   Image,
   LockKeyhole,
+  MapPin,
   PackagePlus,
   Pencil,
+  PlusCircle,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -79,6 +82,29 @@ type CatalogProduct = ProductRecord & {
   }
 }
 
+type WalletRecord = {
+  id: string
+  userId: string
+  balance: number
+  createdAt: string
+  updatedAt: string
+}
+
+type AddressRecord = {
+  id: string
+  userId: string
+  label: string
+  recipientName: string
+  phone: string
+  street: string
+  city: string
+  province: string
+  postalCode: string
+  isDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
 
@@ -125,21 +151,26 @@ function App() {
   const [reviewNotice, setReviewNotice] = useState<Notice>(null)
   const [catalogNotice, setCatalogNotice] = useState<Notice>(null)
   const [sellerNotice, setSellerNotice] = useState<Notice>(null)
+  const [buyerNotice, setBuyerNotice] = useState<Notice>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
   const [isCatalogLoading, setIsCatalogLoading] = useState(false)
   const [isSellerLoading, setIsSellerLoading] = useState(false)
+  const [isBuyerLoading, setIsBuyerLoading] = useState(false)
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
   const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState('')
   const [sellerProducts, setSellerProducts] = useState<ProductRecord[]>([])
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
+  const [wallet, setWallet] = useState<WalletRecord | null>(null)
+  const [addresses, setAddresses] = useState<AddressRecord[]>([])
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
     [currentUser],
   )
   const isSeller = activeRoles.includes('SELLER')
+  const isBuyer = activeRoles.includes('BUYER')
   const selectedStore = sellerStores.find((store) => store.id === selectedStoreId)
 
   const request = useCallback(async function request<T>(path: string, options: RequestInit = {}) {
@@ -224,6 +255,34 @@ function App() {
       setIsSellerLoading(false)
     }
   }, [authHeaders, request])
+
+  const loadBuyerWorkspace = useCallback(async function loadBuyerWorkspace() {
+    if (!token) {
+      setBuyerNotice({ kind: 'error', message: 'Login with a buyer account first.' })
+      return
+    }
+
+    setIsBuyerLoading(true)
+    setBuyerNotice(null)
+
+    try {
+      const [nextWallet, nextAddresses] = await Promise.all([
+        request<WalletRecord>('/wallet/me', {
+          headers: authHeaders(),
+        }),
+        request<AddressRecord[]>('/addresses/me', {
+          headers: authHeaders(),
+        }),
+      ])
+      setWallet(nextWallet)
+      setAddresses(nextAddresses)
+      setBuyerNotice({ kind: 'success', message: 'Buyer workspace loaded.' })
+    } catch (error) {
+      setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsBuyerLoading(false)
+    }
+  }, [authHeaders, request, token])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -405,6 +464,95 @@ function App() {
     }
   }
 
+  async function topUpWallet(amount: number) {
+    setIsBuyerLoading(true)
+    setBuyerNotice(null)
+
+    try {
+      const nextWallet = await request<WalletRecord>('/wallet/top-up', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ amount }),
+      })
+      setWallet(nextWallet)
+      setBuyerNotice({ kind: 'success', message: `${currency.format(amount)} added to your wallet.` })
+    } catch (error) {
+      setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsBuyerLoading(false)
+    }
+  }
+
+  async function handleTopUp(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const data = new FormData(form)
+    const amount = numberValue(data.get('topUpAmount')) ?? 0
+
+    await topUpWallet(amount)
+    form.reset()
+  }
+
+  async function handleCreateAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const data = new FormData(form)
+    setIsBuyerLoading(true)
+    setBuyerNotice(null)
+
+    try {
+      await request<AddressRecord>('/addresses', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(addressPayload(data)),
+      })
+      form.reset()
+      setBuyerNotice({ kind: 'success', message: 'Address saved.' })
+      await loadBuyerWorkspace()
+    } catch (error) {
+      setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsBuyerLoading(false)
+    }
+  }
+
+  async function handleSetDefaultAddress(addressId: string) {
+    setIsBuyerLoading(true)
+    setBuyerNotice(null)
+
+    try {
+      await request<AddressRecord>(`/addresses/${addressId}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify({ isDefault: true }),
+      })
+      setBuyerNotice({ kind: 'success', message: 'Default address updated.' })
+      await loadBuyerWorkspace()
+    } catch (error) {
+      setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsBuyerLoading(false)
+    }
+  }
+
+  async function handleDeleteAddress(addressId: string) {
+    setIsBuyerLoading(true)
+    setBuyerNotice(null)
+
+    try {
+      await request<{ message: string }>(`/addresses/${addressId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      setBuyerNotice({ kind: 'success', message: 'Address deleted.' })
+      await loadBuyerWorkspace()
+    } catch (error) {
+      setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsBuyerLoading(false)
+    }
+  }
+
   function logout() {
     localStorage.removeItem('accessToken')
     setToken('')
@@ -412,6 +560,8 @@ function App() {
     setSellerStores([])
     setSelectedStoreId('')
     setSellerProducts([])
+    setWallet(null)
+    setAddresses([])
     setAuthNotice({ kind: 'success', message: 'Session cleared.' })
   }
 
@@ -549,6 +699,21 @@ function App() {
           }
         }}
         onUpdateProduct={handleUpdateProduct}
+      />
+
+      <BuyerWorkspace
+        addresses={addresses}
+        isBuyer={isBuyer}
+        isLoading={isBuyerLoading}
+        notice={buyerNotice}
+        token={token}
+        wallet={wallet}
+        onCreateAddress={handleCreateAddress}
+        onDeleteAddress={handleDeleteAddress}
+        onRefresh={loadBuyerWorkspace}
+        onSetDefaultAddress={handleSetDefaultAddress}
+        onTopUp={handleTopUp}
+        onTopUpPreset={(amount) => void topUpWallet(amount)}
       />
 
       <ReviewSection notice={reviewNotice} onReview={handleReview} />
@@ -1058,6 +1223,223 @@ function ProductForm({
   )
 }
 
+function BuyerWorkspace({
+  addresses,
+  isBuyer,
+  isLoading,
+  notice,
+  token,
+  wallet,
+  onCreateAddress,
+  onDeleteAddress,
+  onRefresh,
+  onSetDefaultAddress,
+  onTopUp,
+  onTopUpPreset,
+}: {
+  addresses: AddressRecord[]
+  isBuyer: boolean
+  isLoading: boolean
+  notice: Notice
+  token: string
+  wallet: WalletRecord | null
+  onCreateAddress: (event: FormEvent<HTMLFormElement>) => void
+  onDeleteAddress: (addressId: string) => void
+  onRefresh: () => void
+  onSetDefaultAddress: (addressId: string) => void
+  onTopUp: (event: FormEvent<HTMLFormElement>) => void
+  onTopUpPreset: (amount: number) => void
+}) {
+  const disabled = !token || !isBuyer || isLoading
+
+  return (
+    <section className="border-y bg-muted/25">
+      <div className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+          <div>
+            <Badge variant="secondary" className="mb-4 gap-1.5">
+              <CreditCard className="h-3.5 w-3.5" />
+              Buyer wallet
+            </Badge>
+            <h2 className="text-3xl font-semibold tracking-normal">Top up funds and save addresses.</h2>
+            <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+              Buyers can add dummy wallet funds and keep delivery addresses ready for checkout.
+            </p>
+          </div>
+          <Button variant="outline" onClick={onRefresh} disabled={disabled}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh buyer data
+          </Button>
+        </div>
+
+        {!token ? (
+          <Alert className="mt-6">Login with a buyer account to access wallet tools.</Alert>
+        ) : !isBuyer ? (
+          <Alert className="mt-6" variant="destructive">
+            Your current account does not have BUYER access.
+          </Alert>
+        ) : null}
+
+        {notice && (
+          <Alert className="mt-6" variant={notice.kind === 'success' ? 'success' : 'destructive'}>
+            {notice.message}
+          </Alert>
+        )}
+
+        <div className="mt-8 grid gap-6 lg:grid-cols-[0.82fr_1.18fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Wallet balance</CardTitle>
+              <CardDescription>
+                {wallet ? `Last updated ${new Date(wallet.updatedAt).toLocaleString()}` : 'No wallet loaded yet.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border bg-white p-5">
+                <p className="text-sm font-medium text-muted-foreground">Available funds</p>
+                <p className="mt-2 text-3xl font-semibold tracking-normal">
+                  {currency.format(wallet?.balance ?? 0)}
+                </p>
+              </div>
+
+              <div className="mt-5 grid grid-cols-3 gap-2">
+                {[25000, 50000, 100000].map((amount) => (
+                  <Button
+                    key={amount}
+                    type="button"
+                    variant="secondary"
+                    onClick={() => onTopUpPreset(amount)}
+                    disabled={disabled}
+                    className="px-2"
+                  >
+                    {currency.format(amount)}
+                  </Button>
+                ))}
+              </div>
+
+              <form className="mt-5 grid gap-4" onSubmit={onTopUp}>
+                <Field id="topUpAmount" label="Custom amount">
+                  <Input
+                    id="topUpAmount"
+                    name="topUpAmount"
+                    type="number"
+                    min="1"
+                    placeholder="75000"
+                    disabled={disabled}
+                    required
+                  />
+                </Field>
+                <Button type="submit" disabled={disabled}>
+                  <PlusCircle className="h-4 w-4" />
+                  Add funds
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Delivery addresses</CardTitle>
+              <CardDescription>{addresses.length} saved address{addresses.length === 1 ? '' : 'es'}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="grid gap-4" onSubmit={onCreateAddress}>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field id="addressLabel" label="Label">
+                    <Input id="addressLabel" name="label" placeholder="Home" disabled={disabled} required />
+                  </Field>
+                  <Field id="recipientName" label="Recipient">
+                    <Input id="recipientName" name="recipientName" placeholder="Alya" disabled={disabled} required />
+                  </Field>
+                </div>
+                <Field id="addressPhone" label="Phone">
+                  <Input id="addressPhone" name="phone" placeholder="+62..." disabled={disabled} required />
+                </Field>
+                <Field id="addressStreet" label="Street">
+                  <Textarea id="addressStreet" name="street" placeholder="Jl. Sudirman No. 1" disabled={disabled} required />
+                </Field>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field id="addressCity" label="City">
+                    <Input id="addressCity" name="city" placeholder="Jakarta" disabled={disabled} required />
+                  </Field>
+                  <Field id="addressProvince" label="Province">
+                    <Input id="addressProvince" name="province" placeholder="DKI Jakarta" disabled={disabled} required />
+                  </Field>
+                  <Field id="postalCode" label="Postal code">
+                    <Input id="postalCode" name="postalCode" placeholder="10210" disabled={disabled} required />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <input
+                    name="isDefault"
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-input"
+                    disabled={disabled}
+                  />
+                  Make default address
+                </label>
+                <Button type="submit" disabled={disabled}>
+                  Save address
+                </Button>
+              </form>
+
+              <Separator className="my-6" />
+
+              {addresses.length === 0 ? (
+                <Alert>No delivery addresses saved yet.</Alert>
+              ) : (
+                <div className="grid gap-3">
+                  {addresses.map((address) => (
+                    <div key={address.id} className="rounded-md border bg-white p-4">
+                      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <MapPin className="h-4 w-4 text-muted-foreground" />
+                            <p className="font-semibold">{address.label}</p>
+                            {address.isDefault && <Badge variant="success">Default</Badge>}
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                            {address.recipientName} - {address.phone}
+                            <br />
+                            {address.street}, {address.city}, {address.province} {address.postalCode}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {!address.isDefault && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onSetDefaultAddress(address.id)}
+                              disabled={disabled}
+                            >
+                              Set default
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onDeleteAddress(address.id)}
+                            disabled={disabled}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function ReviewSection({
   notice,
   onReview,
@@ -1190,6 +1572,19 @@ function productPayload(data: FormData, partial: boolean) {
   if (stock !== undefined) payload.stock = stock
 
   return payload
+}
+
+function addressPayload(data: FormData) {
+  return {
+    label: stringValue(data.get('label')),
+    recipientName: stringValue(data.get('recipientName')),
+    phone: stringValue(data.get('phone')),
+    street: stringValue(data.get('street')),
+    city: stringValue(data.get('city')),
+    province: stringValue(data.get('province')),
+    postalCode: stringValue(data.get('postalCode')),
+    isDefault: data.get('isDefault') === 'on',
+  }
 }
 
 function stringValue(value: FormDataEntryValue | null) {
