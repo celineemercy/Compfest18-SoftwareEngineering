@@ -13,6 +13,16 @@ enum Role {
   DRIVER
 }
 
+enum DeliveryMethod {
+  INSTANT
+  NEXT_DAY
+  REGULAR
+}
+
+enum OrderStatus {
+  SEDANG_DIKEMAS
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
@@ -23,6 +33,7 @@ model User {
   wallet    Wallet?
   addresses Address[]
   cart      Cart?
+  orders    Order[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -36,6 +47,7 @@ model Store {
   seller      User      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   products    Product[]
   carts       Cart[]
+  orders      Order[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -53,6 +65,7 @@ model Product {
   storeId     String
   store       Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
   cartItems   CartItem[]
+  orderItems  OrderItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -82,6 +95,7 @@ model Address {
   province      String
   postalCode    String
   isDefault     Boolean @default(false)
+  orders        Order[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -116,5 +130,54 @@ model CartItem {
   updatedAt DateTime @updatedAt
 
   @@unique([cartId, productId])
+  @@index([productId])
+}
+
+model Order {
+  id                    String         @id @default(uuid())
+  buyerId               String
+  buyer                 User           @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  storeId               String
+  store                 Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  addressId             String?
+  address               Address?       @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  status                OrderStatus    @default(SEDANG_DIKEMAS)
+  deliveryMethod        DeliveryMethod
+  deliveryFee           Int
+  subtotal              Int
+  ppn                   Int
+  finalTotal            Int
+  shippingLabel         String
+  shippingRecipientName String
+  shippingPhone         String
+  shippingStreet        String
+  shippingCity          String
+  shippingProvince      String
+  shippingPostalCode    String
+  items                 OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([buyerId])
+  @@index([storeId])
+  @@index([addressId])
+}
+
+model OrderItem {
+  id            String  @id @default(uuid())
+  orderId       String
+  order         Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productName   String
+  quantity      Int
+  snapshotPrice Int
+  lineTotal     Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
   @@index([productId])
 }
