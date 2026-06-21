@@ -142,6 +142,19 @@ type CartConflictResponse = {
   incomingStore?: CartStore
 }
 
+type DeliveryMethod = 'INSTANT' | 'NEXT_DAY' | 'REGULAR'
+
+type CheckoutQuote = {
+  store: CartStore | null
+  items: CartItemRecord[]
+  subtotal: number
+  deliveryMethod: DeliveryMethod
+  deliveryFee: number
+  ppnRate: number
+  ppn: number
+  finalTotal: number
+}
+
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
 
@@ -191,6 +204,12 @@ const currency = new Intl.NumberFormat('id-ID', {
   maximumFractionDigits: 0,
 })
 
+const deliveryMethods: Array<{ label: string; value: DeliveryMethod }> = [
+  { label: 'Instant', value: 'INSTANT' },
+  { label: 'Next Day', value: 'NEXT_DAY' },
+  { label: 'Regular', value: 'REGULAR' },
+]
+
 function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [token, setToken] = useState(() => localStorage.getItem('accessToken') ?? '')
@@ -201,12 +220,14 @@ function App() {
   const [sellerNotice, setSellerNotice] = useState<Notice>(null)
   const [buyerNotice, setBuyerNotice] = useState<Notice>(null)
   const [cartNotice, setCartNotice] = useState<Notice>(null)
+  const [checkoutNotice, setCheckoutNotice] = useState<Notice>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
   const [isCatalogLoading, setIsCatalogLoading] = useState(false)
   const [isSellerLoading, setIsSellerLoading] = useState(false)
   const [isBuyerLoading, setIsBuyerLoading] = useState(false)
   const [isCartLoading, setIsCartLoading] = useState(false)
+  const [isCheckoutLoading, setIsCheckoutLoading] = useState(false)
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
   const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState('')
@@ -216,6 +237,8 @@ function App() {
   const [addresses, setAddresses] = useState<AddressRecord[]>([])
   const [cart, setCart] = useState<CartRecord | null>(null)
   const [pendingCartProduct, setPendingCartProduct] = useState<CatalogProduct | null>(null)
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('REGULAR')
+  const [checkoutQuote, setCheckoutQuote] = useState<CheckoutQuote | null>(null)
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
@@ -350,6 +373,7 @@ function App() {
         headers: authHeaders(),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setCartNotice({ kind: 'success', message: 'Cart loaded.' })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -652,6 +676,7 @@ function App() {
         }),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setCartNotice({ kind: 'success', message: `${product.name} added to cart.` })
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
@@ -680,6 +705,7 @@ function App() {
         body: JSON.stringify({ quantity }),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setCartNotice({ kind: 'success', message: 'Cart quantity updated.' })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -698,6 +724,7 @@ function App() {
         headers: authHeaders(),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setCartNotice({ kind: 'success', message: 'Item removed from cart.' })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -716,6 +743,7 @@ function App() {
         headers: authHeaders(),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setPendingCartProduct(null)
       setCartNotice({ kind: 'success', message: 'Cart cleared.' })
     } catch (error) {
@@ -746,12 +774,42 @@ function App() {
         }),
       })
       setCart(nextCart)
+      setCheckoutQuote(null)
       setPendingCartProduct(null)
       setCartNotice({ kind: 'success', message: `${product.name} added after clearing the cart.` })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
     } finally {
       setIsCartLoading(false)
+    }
+  }
+
+  async function calculateCheckout() {
+    if (!token) {
+      setCheckoutNotice({ kind: 'error', message: 'Login with a buyer account to calculate checkout.' })
+      return
+    }
+
+    if (!isBuyer) {
+      setCheckoutNotice({ kind: 'error', message: 'BUYER access is required to calculate checkout.' })
+      return
+    }
+
+    setIsCheckoutLoading(true)
+    setCheckoutNotice(null)
+
+    try {
+      const quote = await request<CheckoutQuote>('/checkout/calculate', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ deliveryMethod }),
+      })
+      setCheckoutQuote(quote)
+      setCheckoutNotice({ kind: 'success', message: 'Checkout total calculated.' })
+    } catch (error) {
+      setCheckoutNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCheckoutLoading(false)
     }
   }
 
@@ -766,6 +824,7 @@ function App() {
     setAddresses([])
     setCart(null)
     setPendingCartProduct(null)
+    setCheckoutQuote(null)
     setAuthNotice({ kind: 'success', message: 'Session cleared.' })
   }
 
@@ -870,13 +929,22 @@ function App() {
 
       <CartSection
         cart={cart}
+        checkoutNotice={checkoutNotice}
+        checkoutQuote={checkoutQuote}
+        deliveryMethod={deliveryMethod}
         isBuyer={isBuyer}
+        isCheckoutLoading={isCheckoutLoading}
         isLoading={isCartLoading}
         notice={cartNotice}
         pendingProduct={pendingCartProduct}
         token={token}
+        onCalculateCheckout={calculateCheckout}
         onClear={clearCart}
         onClearAndRetry={clearCartAndRetry}
+        onDeliveryMethodChange={(method) => {
+          setDeliveryMethod(method)
+          setCheckoutQuote(null)
+        }}
         onRefresh={loadCart}
         onRemoveItem={removeCartItem}
         onUpdateQuantity={updateCartItemQuantity}
@@ -1066,30 +1134,43 @@ function ProductCard({
 
 function CartSection({
   cart,
+  checkoutNotice,
+  checkoutQuote,
+  deliveryMethod,
   isBuyer,
+  isCheckoutLoading,
   isLoading,
   notice,
   pendingProduct,
   token,
+  onCalculateCheckout,
   onClear,
   onClearAndRetry,
+  onDeliveryMethodChange,
   onRefresh,
   onRemoveItem,
   onUpdateQuantity,
 }: {
   cart: CartRecord | null
+  checkoutNotice: Notice
+  checkoutQuote: CheckoutQuote | null
+  deliveryMethod: DeliveryMethod
   isBuyer: boolean
+  isCheckoutLoading: boolean
   isLoading: boolean
   notice: Notice
   pendingProduct: CatalogProduct | null
   token: string
+  onCalculateCheckout: () => void
   onClear: () => void
   onClearAndRetry: () => void
+  onDeliveryMethodChange: (method: DeliveryMethod) => void
   onRefresh: () => void
   onRemoveItem: (itemId: string) => void
   onUpdateQuantity: (itemId: string, quantity: number) => void
 }) {
   const disabled = !token || !isBuyer || isLoading
+  const checkoutDisabled = disabled || isCheckoutLoading || (cart?.items.length ?? 0) === 0
   const items = cart?.items ?? []
 
   return (
@@ -1209,22 +1290,65 @@ function CartSection({
 
         <Card>
           <CardHeader>
-            <CardTitle>Cart summary</CardTitle>
+            <CardTitle>Checkout quote</CardTitle>
             <CardDescription>{cart?.store?.name ?? 'No store selected'}</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-3 text-sm">
+            {checkoutNotice && (
+              <Alert className="mb-5" variant={checkoutNotice.kind === 'success' ? 'success' : 'destructive'}>
+                {checkoutNotice.message}
+              </Alert>
+            )}
+
+            <Field id="deliveryMethod" label="Delivery method">
+              <select
+                id="deliveryMethod"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={deliveryMethod}
+                disabled={checkoutDisabled}
+                onChange={(event) => onDeliveryMethodChange(event.target.value as DeliveryMethod)}
+              >
+                {deliveryMethods.map((method) => (
+                  <option key={method.value} value={method.value}>
+                    {method.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div className="mt-5 grid gap-3 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Items</span>
                 <span className="font-medium">{cart?.totalItems ?? 0}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Subtotal</span>
-                <span className="font-semibold">{currency.format(cart?.subtotal ?? 0)}</span>
+                <span className="font-semibold">{currency.format(checkoutQuote?.subtotal ?? cart?.subtotal ?? 0)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Delivery fee</span>
+                <span className="font-semibold">{currency.format(checkoutQuote?.deliveryFee ?? 0)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">PPN 12%</span>
+                <span className="font-semibold">{currency.format(checkoutQuote?.ppn ?? 0)}</span>
               </div>
             </div>
             <Separator className="my-5" />
-            <Alert>Checkout is prepared for the next level.</Alert>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-muted-foreground">Final total</span>
+              <span className="text-2xl font-semibold tracking-normal">
+                {currency.format(checkoutQuote?.finalTotal ?? 0)}
+              </span>
+            </div>
+            <Button
+              type="button"
+              className="mt-5 w-full"
+              onClick={onCalculateCheckout}
+              disabled={checkoutDisabled}
+            >
+              {isCheckoutLoading ? 'Calculating' : 'Calculate checkout'}
+            </Button>
           </CardContent>
         </Card>
       </div>
