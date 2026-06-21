@@ -1,15 +1,20 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   ArrowRight,
   BadgeCheck,
   CircleDollarSign,
   ClipboardCheck,
+  Image,
   LockKeyhole,
+  PackagePlus,
+  Pencil,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Star,
   Store,
+  Trash2,
   Truck,
   UserRound,
 } from 'lucide-react'
@@ -46,6 +51,34 @@ type AuthResponse = {
   user: AuthUser
 }
 
+type StoreRecord = {
+  id: string
+  name: string
+  description: string | null
+  sellerId: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ProductRecord = {
+  id: string
+  name: string
+  description: string | null
+  price: number
+  imageUrl: string | null
+  stock: number
+  storeId: string
+  createdAt: string
+  updatedAt: string
+}
+
+type CatalogProduct = ProductRecord & {
+  store: {
+    id: string
+    name: string
+  }
+}
+
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
 
@@ -78,21 +111,38 @@ const reviewHighlights = [
   'Role-ready auth',
 ]
 
+const currency = new Intl.NumberFormat('id-ID', {
+  style: 'currency',
+  currency: 'IDR',
+  maximumFractionDigits: 0,
+})
+
 function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login')
   const [token, setToken] = useState(() => localStorage.getItem('accessToken') ?? '')
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
   const [authNotice, setAuthNotice] = useState<Notice>(null)
   const [reviewNotice, setReviewNotice] = useState<Notice>(null)
+  const [catalogNotice, setCatalogNotice] = useState<Notice>(null)
+  const [sellerNotice, setSellerNotice] = useState<Notice>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false)
+  const [isSellerLoading, setIsSellerLoading] = useState(false)
+  const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
+  const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
+  const [selectedStoreId, setSelectedStoreId] = useState('')
+  const [sellerProducts, setSellerProducts] = useState<ProductRecord[]>([])
+  const [editingProductId, setEditingProductId] = useState<string | null>(null)
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
     [currentUser],
   )
+  const isSeller = activeRoles.includes('SELLER')
+  const selectedStore = sellerStores.find((store) => store.id === selectedStoreId)
 
-  async function request<T>(path: string, options: RequestInit = {}) {
+  const request = useCallback(async function request<T>(path: string, options: RequestInit = {}) {
     const response = await fetch(`${API_URL}${path}`, {
       headers: {
         'Content-Type': 'application/json',
@@ -112,7 +162,76 @@ function App() {
     }
 
     return data as T
-  }
+  }, [])
+
+  const authHeaders = useCallback(function authHeaders() {
+    return {
+      Authorization: `Bearer ${token}`,
+    }
+  }, [token])
+
+  const loadCatalog = useCallback(async function loadCatalog() {
+    setIsCatalogLoading(true)
+    setCatalogNotice(null)
+
+    try {
+      const products = await request<CatalogProduct[]>('/catalog/products')
+      setCatalogProducts(products)
+    } catch (error) {
+      setCatalogNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsCatalogLoading(false)
+    }
+  }, [request])
+
+  const loadStores = useCallback(async function loadStores() {
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      const stores = await request<StoreRecord[]>('/stores/me', {
+        headers: authHeaders(),
+      })
+      const nextStoreId = selectedStoreId || stores[0]?.id || ''
+      setSellerStores(stores)
+      setSelectedStoreId(nextStoreId)
+
+      if (nextStoreId) {
+        const products = await request<ProductRecord[]>(`/stores/${nextStoreId}/products`, {
+          headers: authHeaders(),
+        })
+        setSellerProducts(products)
+      }
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }, [authHeaders, request, selectedStoreId])
+
+  const loadSellerProducts = useCallback(async function loadSellerProducts(storeId: string) {
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      const products = await request<ProductRecord[]>(`/stores/${storeId}/products`, {
+        headers: authHeaders(),
+      })
+      setSellerProducts(products)
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }, [authHeaders, request])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadCatalog()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [loadCatalog])
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -179,9 +298,7 @@ function App() {
 
     try {
       const user = await request<AuthUser>('/auth/me', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: authHeaders(),
       })
       setCurrentUser(user)
       setAuthNotice({ kind: 'success', message: 'Profile loaded.' })
@@ -192,10 +309,109 @@ function App() {
     }
   }
 
+  async function handleCreateStore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const data = new FormData(form)
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      const store = await request<StoreRecord>('/stores', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          name: stringValue(data.get('storeName')),
+          description: optionalString(data.get('storeDescription')),
+        }),
+      })
+      form.reset()
+      setSelectedStoreId(store.id)
+      setSellerNotice({ kind: 'success', message: `${store.name} is ready for products.` })
+      await loadStores()
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }
+
+  async function handleCreateProduct(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedStoreId) {
+      setSellerNotice({ kind: 'error', message: 'Create or select a store first.' })
+      return
+    }
+
+    const form = event.currentTarget
+    const data = new FormData(form)
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      await request<ProductRecord>(`/stores/${selectedStoreId}/products`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(productPayload(data, false)),
+      })
+      form.reset()
+      setSellerNotice({ kind: 'success', message: 'Product added to your store.' })
+      await Promise.all([loadSellerProducts(selectedStoreId), loadCatalog()])
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }
+
+  async function handleUpdateProduct(event: FormEvent<HTMLFormElement>, productId: string) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const data = new FormData(form)
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      await request<ProductRecord>(`/products/${productId}`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+        body: JSON.stringify(productPayload(data, true)),
+      })
+      setEditingProductId(null)
+      setSellerNotice({ kind: 'success', message: 'Product updated.' })
+      await Promise.all([loadSellerProducts(selectedStoreId), loadCatalog()])
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }
+
+  async function handleDeleteProduct(productId: string) {
+    setIsSellerLoading(true)
+    setSellerNotice(null)
+
+    try {
+      await request<{ message: string }>(`/products/${productId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      setSellerNotice({ kind: 'success', message: 'Product deleted.' })
+      await Promise.all([loadSellerProducts(selectedStoreId), loadCatalog()])
+    } catch (error) {
+      setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsSellerLoading(false)
+    }
+  }
+
   function logout() {
     localStorage.removeItem('accessToken')
     setToken('')
     setCurrentUser(null)
+    setSellerStores([])
+    setSelectedStoreId('')
+    setSellerProducts([])
     setAuthNotice({ kind: 'success', message: 'Session cleared.' })
   }
 
@@ -227,11 +443,11 @@ function App() {
             </div>
 
             <h1 className="max-w-3xl text-4xl font-semibold leading-tight tracking-normal text-balance md:text-6xl">
-              Public marketplace access with roles that travel with every account.
+              Public marketplace access with products sellers manage live.
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground md:text-lg">
-              Browse as a guest, register as a buyer, and keep seller-ready roles attached
-              to the same identity as the marketplace grows.
+              Browse real catalog items as a guest, then sign in as a seller to
+              create storefronts and publish products into SEAPEDIA.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -251,7 +467,7 @@ function App() {
             <div className="relative flex h-full flex-col justify-between p-6">
               <div className="flex items-center justify-between">
                 <Badge variant="success">Marketplace live</Badge>
-                <Badge variant="outline">JWT ready</Badge>
+                <Badge variant="outline">Seller CRUD</Badge>
               </div>
               <div className="mx-auto my-8 flex w-full max-w-sm items-center justify-center">
                 <img
@@ -289,210 +505,650 @@ function App() {
         })}
       </section>
 
-      <section className="border-y bg-muted/35">
-        <div className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[0.9fr_1.1fr] lg:px-10">
+      <CatalogSection
+        isLoading={isCatalogLoading}
+        notice={catalogNotice}
+        products={catalogProducts}
+        onRefresh={loadCatalog}
+      />
+
+      <AuthSection
+        activeRoles={activeRoles}
+        authMode={authMode}
+        authNotice={authNotice}
+        currentUser={currentUser}
+        isAuthLoading={isAuthLoading}
+        isProfileLoading={isProfileLoading}
+        token={token}
+        onAuthModeChange={setAuthMode}
+        onLogin={handleLogin}
+        onLogout={logout}
+        onRegister={handleRegister}
+        onLoadProfile={loadProfile}
+      />
+
+      <SellerDashboard
+        editingProductId={editingProductId}
+        isSeller={isSeller}
+        isLoading={isSellerLoading}
+        notice={sellerNotice}
+        products={sellerProducts}
+        selectedStore={selectedStore}
+        selectedStoreId={selectedStoreId}
+        stores={sellerStores}
+        token={token}
+        onCreateProduct={handleCreateProduct}
+        onCreateStore={handleCreateStore}
+        onDeleteProduct={handleDeleteProduct}
+        onEditProduct={setEditingProductId}
+        onRefreshStores={loadStores}
+        onSelectStore={(storeId) => {
+          setSelectedStoreId(storeId)
+          if (storeId) {
+            void loadSellerProducts(storeId)
+          }
+        }}
+        onUpdateProduct={handleUpdateProduct}
+      />
+
+      <ReviewSection notice={reviewNotice} onReview={handleReview} />
+    </main>
+  )
+}
+
+function CatalogSection({
+  isLoading,
+  notice,
+  products,
+  onRefresh,
+}: {
+  isLoading: boolean
+  notice: Notice
+  products: CatalogProduct[]
+  onRefresh: () => void
+}) {
+  return (
+    <section className="border-y bg-muted/25">
+      <div className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
-            <Badge variant="outline" className="mb-4">Auth workspace</Badge>
-            <h2 className="text-3xl font-semibold tracking-normal">Login, register, and inspect roles.</h2>
-            <p className="mt-4 leading-7 text-muted-foreground">
-              The UI calls the NestJS auth endpoints and keeps the current account roles
-              visible as badges.
+            <Badge variant="secondary" className="mb-4 gap-1.5">
+              <PackagePlus className="h-3.5 w-3.5" />
+              Live catalog
+            </Badge>
+            <h2 className="text-3xl font-semibold tracking-normal">Guest catalog from the database.</h2>
+            <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+              Public shoppers see products created by sellers through the dashboard.
             </p>
-
-            <div className="mt-6 rounded-lg border bg-card p-5">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Current identity</p>
-                  <p className="mt-1 text-xl font-semibold">
-                    {currentUser ? currentUser.username : 'Guest session'}
-                  </p>
-                </div>
-                <LockKeyhole className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <Separator className="my-4" />
-              <div className="flex flex-wrap gap-2">
-                {activeRoles.length > 0 ? (
-                  activeRoles.map((role) => <Badge key={role}>{role}</Badge>)
-                ) : (
-                  <Badge variant="outline">GUEST</Badge>
-                )}
-              </div>
-              <div className="mt-5 flex flex-wrap gap-3">
-                <Button variant="secondary" onClick={loadProfile} disabled={isProfileLoading}>
-                  <BadgeCheck className="h-4 w-4" />
-                  {isProfileLoading ? 'Loading' : 'Load /auth/me'}
-                </Button>
-                <Button variant="ghost" onClick={logout} disabled={!token}>
-                  Clear session
-                </Button>
-              </div>
-            </div>
           </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Account access</CardTitle>
-              <CardDescription>Use the API credentials created through the auth module.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Tabs>
-                <TabsList>
-                  <TabsTrigger active={authMode === 'login'} onClick={() => setAuthMode('login')}>
-                    Login
-                  </TabsTrigger>
-                  <TabsTrigger active={authMode === 'register'} onClick={() => setAuthMode('register')}>
-                    Register
-                  </TabsTrigger>
-                </TabsList>
-
-                {authNotice && (
-                  <Alert
-                    className="mt-5"
-                    variant={authNotice.kind === 'success' ? 'success' : 'destructive'}
-                  >
-                    {authNotice.message}
-                  </Alert>
-                )}
-
-                {authMode === 'login' ? (
-                  <TabsContent>
-                    <form className="grid gap-4" onSubmit={handleLogin}>
-                      <Field id="login-email" label="Email">
-                        <Input id="login-email" name="email" type="email" autoComplete="email" required />
-                      </Field>
-                      <Field id="login-password" label="Password">
-                        <Input
-                          id="login-password"
-                          name="password"
-                          type="password"
-                          autoComplete="current-password"
-                          minLength={6}
-                          required
-                        />
-                      </Field>
-                      <Button type="submit" disabled={isAuthLoading}>
-                        {isAuthLoading ? 'Signing in' : 'Sign in'}
-                      </Button>
-                    </form>
-                  </TabsContent>
-                ) : (
-                  <TabsContent>
-                    <form className="grid gap-4" onSubmit={handleRegister}>
-                      <Field id="register-email" label="Email">
-                        <Input id="register-email" name="email" type="email" autoComplete="email" required />
-                      </Field>
-                      <Field id="register-username" label="Username">
-                        <Input id="register-username" name="username" autoComplete="username" required />
-                      </Field>
-                      <Field id="register-password" label="Password">
-                        <Input
-                          id="register-password"
-                          name="password"
-                          type="password"
-                          autoComplete="new-password"
-                          minLength={6}
-                          required
-                        />
-                      </Field>
-                      <Button type="submit" disabled={isAuthLoading}>
-                        {isAuthLoading ? 'Creating account' : 'Create buyer account'}
-                      </Button>
-                    </form>
-                  </TabsContent>
-                )}
-              </Tabs>
-            </CardContent>
-          </Card>
+          <Button variant="outline" onClick={onRefresh} disabled={isLoading}>
+            <RefreshCw className="h-4 w-4" />
+            {isLoading ? 'Refreshing' : 'Refresh catalog'}
+          </Button>
         </div>
-      </section>
 
-      <section className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[1fr_0.95fr] lg:px-10">
-        <div>
-          <Badge variant="secondary" className="mb-4 gap-1.5">
-            <ClipboardCheck className="h-3.5 w-3.5" />
-            Application reviews
+        {notice && (
+          <Alert className="mt-6" variant={notice.kind === 'success' ? 'success' : 'destructive'}>
+            {notice.message}
+          </Alert>
+        )}
+
+        {isLoading && products.length === 0 ? (
+          <p className="mt-8 text-muted-foreground">Loading catalog products...</p>
+        ) : products.length === 0 ? (
+          <Card className="mt-8">
+            <CardHeader>
+              <CardTitle>No products yet</CardTitle>
+              <CardDescription>
+                Once a seller creates products, they will appear here for guests.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <div className="mt-8 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {products.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ProductCard({ product }: { product: CatalogProduct }) {
+  return (
+    <Card className="overflow-hidden">
+      {product.imageUrl ? (
+        <img
+          src={product.imageUrl}
+          alt={product.name}
+          className="h-44 w-full object-cover"
+        />
+      ) : (
+        <div className="flex h-44 items-center justify-center bg-muted">
+          <Image className="h-8 w-8 text-muted-foreground" />
+        </div>
+      )}
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>{product.name}</CardTitle>
+            <CardDescription>{product.store.name}</CardDescription>
+          </div>
+          <Badge variant={product.stock > 0 ? 'success' : 'outline'}>
+            {product.stock > 0 ? `${product.stock} left` : 'Sold out'}
           </Badge>
-          <h2 className="text-3xl font-semibold tracking-normal">Public reviews before checkout exists.</h2>
-          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
-            Collect marketplace feedback while checkout is still out of scope for Level 1.
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="min-h-12 text-sm leading-6 text-muted-foreground">
+          {product.description || 'No description provided.'}
+        </p>
+        <p className="mt-4 text-lg font-semibold">{currency.format(product.price)}</p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function AuthSection({
+  activeRoles,
+  authMode,
+  authNotice,
+  currentUser,
+  isAuthLoading,
+  isProfileLoading,
+  token,
+  onAuthModeChange,
+  onLogin,
+  onLogout,
+  onRegister,
+  onLoadProfile,
+}: {
+  activeRoles: Role[]
+  authMode: AuthMode
+  authNotice: Notice
+  currentUser: AuthUser | null
+  isAuthLoading: boolean
+  isProfileLoading: boolean
+  token: string
+  onAuthModeChange: (mode: AuthMode) => void
+  onLogin: (event: FormEvent<HTMLFormElement>) => void
+  onLogout: () => void
+  onRegister: (event: FormEvent<HTMLFormElement>) => void
+  onLoadProfile: () => void
+}) {
+  return (
+    <section className="border-y bg-muted/35">
+      <div className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[0.9fr_1.1fr] lg:px-10">
+        <div>
+          <Badge variant="outline" className="mb-4">Auth workspace</Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">Login, register, and inspect roles.</h2>
+          <p className="mt-4 leading-7 text-muted-foreground">
+            The UI calls the NestJS auth endpoints and keeps the current account roles
+            visible as badges.
           </p>
 
-          <div className="mt-7 grid gap-4 sm:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CircleDollarSign className="mb-2 h-5 w-5 text-emerald-700" />
-                <CardTitle>No payment dependency</CardTitle>
-                <CardDescription>Reviews stay independent from order history.</CardDescription>
-              </CardHeader>
-            </Card>
-            <Card>
-              <CardHeader>
-                <Star className="mb-2 h-5 w-5 text-amber-600" />
-                <CardTitle>Signal for sellers</CardTitle>
-                <CardDescription>Early feedback helps shape public marketplace trust.</CardDescription>
-              </CardHeader>
-            </Card>
+          <div className="mt-6 rounded-lg border bg-card p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">Current identity</p>
+                <p className="mt-1 text-xl font-semibold">
+                  {currentUser ? currentUser.username : 'Guest session'}
+                </p>
+              </div>
+              <LockKeyhole className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <Separator className="my-4" />
+            <div className="flex flex-wrap gap-2">
+              {activeRoles.length > 0 ? (
+                activeRoles.map((role) => <Badge key={role}>{role}</Badge>)
+              ) : (
+                <Badge variant="outline">GUEST</Badge>
+              )}
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Button variant="secondary" onClick={onLoadProfile} disabled={isProfileLoading}>
+                <BadgeCheck className="h-4 w-4" />
+                {isProfileLoading ? 'Loading' : 'Load /auth/me'}
+              </Button>
+              <Button variant="ghost" onClick={onLogout} disabled={!token}>
+                Clear session
+              </Button>
+            </div>
           </div>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Leave a review</CardTitle>
-            <CardDescription>Reviews are captured locally for this frontend step.</CardDescription>
+            <CardTitle>Account access</CardTitle>
+            <CardDescription>Use the API credentials created through the auth module.</CardDescription>
           </CardHeader>
           <CardContent>
-            {reviewNotice && (
-              <Alert
-                className="mb-5"
-                variant={reviewNotice.kind === 'success' ? 'success' : 'destructive'}
-              >
-                {reviewNotice.message}
-              </Alert>
-            )}
-            <form className="grid gap-4" onSubmit={handleReview}>
-              <Field id="reviewerName" label="Name">
-                <Input id="reviewerName" name="reviewerName" placeholder="Alya" required />
-              </Field>
-              <Field id="rating" label="Rating">
-                <select
-                  id="rating"
-                  name="rating"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  defaultValue="5"
+            <Tabs>
+              <TabsList>
+                <TabsTrigger active={authMode === 'login'} onClick={() => onAuthModeChange('login')}>
+                  Login
+                </TabsTrigger>
+                <TabsTrigger active={authMode === 'register'} onClick={() => onAuthModeChange('register')}>
+                  Register
+                </TabsTrigger>
+              </TabsList>
+
+              {authNotice && (
+                <Alert
+                  className="mt-5"
+                  variant={authNotice.kind === 'success' ? 'success' : 'destructive'}
                 >
-                  <option value="5">5 stars</option>
-                  <option value="4">4 stars</option>
-                  <option value="3">3 stars</option>
-                  <option value="2">2 stars</option>
-                  <option value="1">1 star</option>
-                </select>
-              </Field>
-              <Field id="reviewCategory" label="Category">
-                <select
-                  id="reviewCategory"
-                  name="reviewCategory"
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  defaultValue="guest"
-                >
-                  <option value="guest">Guest experience</option>
-                  <option value="buyer">Buyer account</option>
-                  <option value="seller">Seller application</option>
-                </select>
-              </Field>
-              <Field id="reviewText" label="Review">
-                <Textarea
-                  id="reviewText"
-                  name="reviewText"
-                  placeholder="The marketplace flow feels..."
-                  required
-                />
-              </Field>
-              <Button type="submit">Submit review</Button>
-            </form>
+                  {authNotice.message}
+                </Alert>
+              )}
+
+              {authMode === 'login' ? (
+                <TabsContent>
+                  <form className="grid gap-4" onSubmit={onLogin}>
+                    <Field id="login-email" label="Email">
+                      <Input id="login-email" name="email" type="email" autoComplete="email" required />
+                    </Field>
+                    <Field id="login-password" label="Password">
+                      <Input
+                        id="login-password"
+                        name="password"
+                        type="password"
+                        autoComplete="current-password"
+                        minLength={6}
+                        required
+                      />
+                    </Field>
+                    <Button type="submit" disabled={isAuthLoading}>
+                      {isAuthLoading ? 'Signing in' : 'Sign in'}
+                    </Button>
+                  </form>
+                </TabsContent>
+              ) : (
+                <TabsContent>
+                  <form className="grid gap-4" onSubmit={onRegister}>
+                    <Field id="register-email" label="Email">
+                      <Input id="register-email" name="email" type="email" autoComplete="email" required />
+                    </Field>
+                    <Field id="register-username" label="Username">
+                      <Input id="register-username" name="username" autoComplete="username" required />
+                    </Field>
+                    <Field id="register-password" label="Password">
+                      <Input
+                        id="register-password"
+                        name="password"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={6}
+                        required
+                      />
+                    </Field>
+                    <Button type="submit" disabled={isAuthLoading}>
+                      {isAuthLoading ? 'Creating account' : 'Create buyer account'}
+                    </Button>
+                  </form>
+                </TabsContent>
+              )}
+            </Tabs>
           </CardContent>
         </Card>
-      </section>
-    </main>
+      </div>
+    </section>
+  )
+}
+
+function SellerDashboard({
+  editingProductId,
+  isSeller,
+  isLoading,
+  notice,
+  products,
+  selectedStore,
+  selectedStoreId,
+  stores,
+  token,
+  onCreateProduct,
+  onCreateStore,
+  onDeleteProduct,
+  onEditProduct,
+  onRefreshStores,
+  onSelectStore,
+  onUpdateProduct,
+}: {
+  editingProductId: string | null
+  isSeller: boolean
+  isLoading: boolean
+  notice: Notice
+  products: ProductRecord[]
+  selectedStore?: StoreRecord
+  selectedStoreId: string
+  stores: StoreRecord[]
+  token: string
+  onCreateProduct: (event: FormEvent<HTMLFormElement>) => void
+  onCreateStore: (event: FormEvent<HTMLFormElement>) => void
+  onDeleteProduct: (productId: string) => void
+  onEditProduct: (productId: string | null) => void
+  onRefreshStores: () => void
+  onSelectStore: (storeId: string) => void
+  onUpdateProduct: (event: FormEvent<HTMLFormElement>, productId: string) => void
+}) {
+  return (
+    <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+        <div>
+          <Badge variant="outline" className="mb-4">Seller dashboard</Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">Manage storefronts and products.</h2>
+          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+            Sellers can create stores, add product listings, and update inventory.
+          </p>
+        </div>
+        <Button variant="outline" onClick={onRefreshStores} disabled={!token || !isSeller || isLoading}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh stores
+        </Button>
+      </div>
+
+      {!token ? (
+        <Alert className="mt-6">Login with a seller account to manage products.</Alert>
+      ) : !isSeller ? (
+        <Alert className="mt-6" variant="destructive">
+          Your current account does not have SELLER access.
+        </Alert>
+      ) : null}
+
+      {notice && (
+        <Alert className="mt-6" variant={notice.kind === 'success' ? 'success' : 'destructive'}>
+          {notice.message}
+        </Alert>
+      )}
+
+      <div className="mt-8 grid gap-6 lg:grid-cols-[0.85fr_1.15fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Create storefront</CardTitle>
+            <CardDescription>A unique store name is required.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="grid gap-4" onSubmit={onCreateStore}>
+              <Field id="storeName" label="Store name">
+                <Input id="storeName" name="storeName" disabled={!isSeller} required />
+              </Field>
+              <Field id="storeDescription" label="Description">
+                <Textarea id="storeDescription" name="storeDescription" disabled={!isSeller} />
+              </Field>
+              <Button type="submit" disabled={!isSeller || isLoading}>
+                Create store
+              </Button>
+            </form>
+
+            <Separator className="my-6" />
+
+            <Field id="storeSelect" label="Selected store">
+              <select
+                id="storeSelect"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                disabled={!isSeller || stores.length === 0}
+                value={selectedStoreId}
+                onChange={(event) => onSelectStore(event.target.value)}
+              >
+                <option value="">Select a store</option>
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Add product</CardTitle>
+            <CardDescription>
+              {selectedStore ? `Publishing into ${selectedStore.name}` : 'Select a store first.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ProductForm
+              disabled={!isSeller || !selectedStoreId || isLoading}
+              submitLabel="Add product"
+              onSubmit={onCreateProduct}
+            />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="mt-8">
+        <h3 className="text-xl font-semibold tracking-normal">Store products</h3>
+        {products.length === 0 ? (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>No products in this store</CardTitle>
+              <CardDescription>Create the first product to publish it to the catalog.</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            {products.map((product) => (
+              <Card key={product.id}>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <CardTitle>{product.name}</CardTitle>
+                      <CardDescription>{currency.format(product.price)}</CardDescription>
+                    </div>
+                    <Badge variant={product.stock > 0 ? 'success' : 'outline'}>
+                      Stock {product.stock}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {editingProductId === product.id ? (
+                    <ProductForm
+                      disabled={isLoading}
+                      product={product}
+                      submitLabel="Save product"
+                      onCancel={() => onEditProduct(null)}
+                      onSubmit={(event) => onUpdateProduct(event, product.id)}
+                    />
+                  ) : (
+                    <>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        {product.description || 'No description provided.'}
+                      </p>
+                      <div className="mt-5 flex flex-wrap gap-3">
+                        <Button variant="outline" onClick={() => onEditProduct(product.id)}>
+                          <Pencil className="h-4 w-4" />
+                          Edit
+                        </Button>
+                        <Button variant="ghost" onClick={() => onDeleteProduct(product.id)}>
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function ProductForm({
+  disabled,
+  product,
+  submitLabel,
+  onCancel,
+  onSubmit,
+}: {
+  disabled: boolean
+  product?: ProductRecord
+  submitLabel: string
+  onCancel?: () => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <form className="grid gap-4" onSubmit={onSubmit}>
+      <Field id={product ? `name-${product.id}` : 'productName'} label="Product name">
+        <Input
+          id={product ? `name-${product.id}` : 'productName'}
+          name="productName"
+          defaultValue={product?.name}
+          disabled={disabled}
+          required
+        />
+      </Field>
+      <Field id={product ? `description-${product.id}` : 'productDescription'} label="Description">
+        <Textarea
+          id={product ? `description-${product.id}` : 'productDescription'}
+          name="productDescription"
+          defaultValue={product?.description ?? ''}
+          disabled={disabled}
+        />
+      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field id={product ? `price-${product.id}` : 'productPrice'} label="Price">
+          <Input
+            id={product ? `price-${product.id}` : 'productPrice'}
+            name="productPrice"
+            type="number"
+            min="1"
+            defaultValue={product?.price}
+            disabled={disabled}
+            required
+          />
+        </Field>
+        <Field id={product ? `stock-${product.id}` : 'productStock'} label="Stock">
+          <Input
+            id={product ? `stock-${product.id}` : 'productStock'}
+            name="productStock"
+            type="number"
+            min="0"
+            defaultValue={product?.stock ?? 0}
+            disabled={disabled}
+          />
+        </Field>
+      </div>
+      <Field id={product ? `image-${product.id}` : 'productImage'} label="Image URL">
+        <Input
+          id={product ? `image-${product.id}` : 'productImage'}
+          name="productImage"
+          type="url"
+          defaultValue={product?.imageUrl ?? ''}
+          disabled={disabled}
+        />
+      </Field>
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" disabled={disabled}>
+          {submitLabel}
+        </Button>
+        {onCancel && (
+          <Button type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
+    </form>
+  )
+}
+
+function ReviewSection({
+  notice,
+  onReview,
+}: {
+  notice: Notice
+  onReview: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <section className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[1fr_0.95fr] lg:px-10">
+      <div>
+        <Badge variant="secondary" className="mb-4 gap-1.5">
+          <ClipboardCheck className="h-3.5 w-3.5" />
+          Application reviews
+        </Badge>
+        <h2 className="text-3xl font-semibold tracking-normal">Public reviews before checkout exists.</h2>
+        <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+          Collect marketplace feedback while checkout is still out of scope for Level 2.
+        </p>
+
+        <div className="mt-7 grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CircleDollarSign className="mb-2 h-5 w-5 text-emerald-700" />
+              <CardTitle>No payment dependency</CardTitle>
+              <CardDescription>Reviews stay independent from order history.</CardDescription>
+            </CardHeader>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Star className="mb-2 h-5 w-5 text-amber-600" />
+              <CardTitle>Signal for sellers</CardTitle>
+              <CardDescription>Early feedback helps shape public marketplace trust.</CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Leave a review</CardTitle>
+          <CardDescription>Reviews are captured locally for this frontend step.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {notice && (
+            <Alert className="mb-5" variant={notice.kind === 'success' ? 'success' : 'destructive'}>
+              {notice.message}
+            </Alert>
+          )}
+          <form className="grid gap-4" onSubmit={onReview}>
+            <Field id="reviewerName" label="Name">
+              <Input id="reviewerName" name="reviewerName" placeholder="Alya" required />
+            </Field>
+            <Field id="rating" label="Rating">
+              <select
+                id="rating"
+                name="rating"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                defaultValue="5"
+              >
+                <option value="5">5 stars</option>
+                <option value="4">4 stars</option>
+                <option value="3">3 stars</option>
+                <option value="2">2 stars</option>
+                <option value="1">1 star</option>
+              </select>
+            </Field>
+            <Field id="reviewCategory" label="Category">
+              <select
+                id="reviewCategory"
+                name="reviewCategory"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                defaultValue="guest"
+              >
+                <option value="guest">Guest experience</option>
+                <option value="buyer">Buyer account</option>
+                <option value="seller">Seller application</option>
+              </select>
+            </Field>
+            <Field id="reviewText" label="Review">
+              <Textarea
+                id="reviewText"
+                name="reviewText"
+                placeholder="The marketplace flow feels..."
+                required
+              />
+            </Field>
+            <Button type="submit">Submit review</Button>
+          </form>
+        </CardContent>
+      </Card>
+    </section>
   )
 }
 
@@ -511,6 +1167,45 @@ function Field({
       {children}
     </div>
   )
+}
+
+function productPayload(data: FormData, partial: boolean) {
+  const payload: {
+    name?: string
+    description?: string
+    price?: number
+    imageUrl?: string
+    stock?: number
+  } = {}
+  const name = optionalString(data.get('productName'))
+  const description = optionalString(data.get('productDescription'))
+  const imageUrl = optionalString(data.get('productImage'))
+  const price = numberValue(data.get('productPrice'))
+  const stock = numberValue(data.get('productStock'))
+
+  if (name || !partial) payload.name = name ?? ''
+  if (description) payload.description = description
+  if (price !== undefined || !partial) payload.price = price ?? 0
+  if (imageUrl) payload.imageUrl = imageUrl
+  if (stock !== undefined) payload.stock = stock
+
+  return payload
+}
+
+function stringValue(value: FormDataEntryValue | null) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function optionalString(value: FormDataEntryValue | null) {
+  const text = stringValue(value)
+  return text.length > 0 ? text : undefined
+}
+
+function numberValue(value: FormDataEntryValue | null) {
+  const text = stringValue(value)
+  if (!text) return undefined
+
+  return Number(text)
 }
 
 function getErrorMessage(error: unknown) {
