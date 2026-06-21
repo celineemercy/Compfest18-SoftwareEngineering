@@ -155,6 +155,42 @@ type CheckoutQuote = {
   finalTotal: number
 }
 
+type OrderItemRecord = {
+  id: string
+  orderId: string
+  productId: string
+  productName: string
+  quantity: number
+  snapshotPrice: number
+  lineTotal: number
+  createdAt: string
+  updatedAt: string
+}
+
+type OrderRecord = {
+  id: string
+  status: 'SEDANG_DIKEMAS'
+  deliveryMethod: DeliveryMethod
+  deliveryFee: number
+  subtotal: number
+  ppn: number
+  finalTotal: number
+  shippingRecipientName: string
+  shippingStreet: string
+  shippingCity: string
+  shippingProvince: string
+  shippingPostalCode: string
+  store: CartStore
+  items: OrderItemRecord[]
+  createdAt: string
+  updatedAt: string
+}
+
+type PaymentResult = {
+  order: OrderRecord
+  remainingWalletBalance: number
+}
+
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
 
@@ -221,6 +257,7 @@ function App() {
   const [buyerNotice, setBuyerNotice] = useState<Notice>(null)
   const [cartNotice, setCartNotice] = useState<Notice>(null)
   const [checkoutNotice, setCheckoutNotice] = useState<Notice>(null)
+  const [paymentNotice, setPaymentNotice] = useState<Notice>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
   const [isProfileLoading, setIsProfileLoading] = useState(false)
   const [isCatalogLoading, setIsCatalogLoading] = useState(false)
@@ -228,6 +265,7 @@ function App() {
   const [isBuyerLoading, setIsBuyerLoading] = useState(false)
   const [isCartLoading, setIsCartLoading] = useState(false)
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false)
+  const [isPaymentLoading, setIsPaymentLoading] = useState(false)
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
   const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState('')
@@ -239,6 +277,8 @@ function App() {
   const [pendingCartProduct, setPendingCartProduct] = useState<CatalogProduct | null>(null)
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('REGULAR')
   const [checkoutQuote, setCheckoutQuote] = useState<CheckoutQuote | null>(null)
+  const [selectedAddressId, setSelectedAddressId] = useState('')
+  const [paidOrder, setPaidOrder] = useState<OrderRecord | null>(null)
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
@@ -351,6 +391,7 @@ function App() {
       ])
       setWallet(nextWallet)
       setAddresses(nextAddresses)
+      setSelectedAddressId((currentAddressId) => currentAddressId || nextAddresses[0]?.id || '')
       setBuyerNotice({ kind: 'success', message: 'Buyer workspace loaded.' })
     } catch (error) {
       setBuyerNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -677,6 +718,7 @@ function App() {
       })
       setCart(nextCart)
       setCheckoutQuote(null)
+      setPaidOrder(null)
       setCartNotice({ kind: 'success', message: `${product.name} added to cart.` })
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
@@ -706,6 +748,7 @@ function App() {
       })
       setCart(nextCart)
       setCheckoutQuote(null)
+      setPaidOrder(null)
       setCartNotice({ kind: 'success', message: 'Cart quantity updated.' })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -725,6 +768,7 @@ function App() {
       })
       setCart(nextCart)
       setCheckoutQuote(null)
+      setPaidOrder(null)
       setCartNotice({ kind: 'success', message: 'Item removed from cart.' })
     } catch (error) {
       setCartNotice({ kind: 'error', message: getErrorMessage(error) })
@@ -744,6 +788,7 @@ function App() {
       })
       setCart(nextCart)
       setCheckoutQuote(null)
+      setPaidOrder(null)
       setPendingCartProduct(null)
       setCartNotice({ kind: 'success', message: 'Cart cleared.' })
     } catch (error) {
@@ -775,6 +820,7 @@ function App() {
       })
       setCart(nextCart)
       setCheckoutQuote(null)
+      setPaidOrder(null)
       setPendingCartProduct(null)
       setCartNotice({ kind: 'success', message: `${product.name} added after clearing the cart.` })
     } catch (error) {
@@ -805,11 +851,49 @@ function App() {
         body: JSON.stringify({ deliveryMethod }),
       })
       setCheckoutQuote(quote)
+      setPaidOrder(null)
       setCheckoutNotice({ kind: 'success', message: 'Checkout total calculated.' })
     } catch (error) {
       setCheckoutNotice({ kind: 'error', message: getErrorMessage(error) })
     } finally {
       setIsCheckoutLoading(false)
+    }
+  }
+
+  async function payCheckout() {
+    if (!checkoutQuote) {
+      setPaymentNotice({ kind: 'error', message: 'Calculate checkout before paying.' })
+      return
+    }
+
+    if (!selectedAddressId) {
+      setPaymentNotice({ kind: 'error', message: 'Select a delivery address before paying.' })
+      return
+    }
+
+    setIsPaymentLoading(true)
+    setPaymentNotice(null)
+
+    try {
+      const result = await request<PaymentResult>('/checkout/pay', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          deliveryMethod,
+          addressId: selectedAddressId,
+        }),
+      })
+      setPaidOrder(result.order)
+      setCheckoutQuote(null)
+      setPaymentNotice({
+        kind: 'success',
+        message: `Order ${result.order.id} is ${formatOrderStatus(result.order.status)}.`,
+      })
+      await Promise.all([loadCart(), loadBuyerWorkspace(), loadCatalog()])
+    } catch (error) {
+      setPaymentNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsPaymentLoading(false)
     }
   }
 
@@ -825,6 +909,8 @@ function App() {
     setCart(null)
     setPendingCartProduct(null)
     setCheckoutQuote(null)
+    setPaidOrder(null)
+    setSelectedAddressId('')
     setAuthNotice({ kind: 'success', message: 'Session cleared.' })
   }
 
@@ -928,6 +1014,7 @@ function App() {
       />
 
       <CartSection
+        addresses={addresses}
         cart={cart}
         checkoutNotice={checkoutNotice}
         checkoutQuote={checkoutQuote}
@@ -935,8 +1022,12 @@ function App() {
         isBuyer={isBuyer}
         isCheckoutLoading={isCheckoutLoading}
         isLoading={isCartLoading}
+        isPaymentLoading={isPaymentLoading}
         notice={cartNotice}
+        paidOrder={paidOrder}
+        paymentNotice={paymentNotice}
         pendingProduct={pendingCartProduct}
+        selectedAddressId={selectedAddressId}
         token={token}
         onCalculateCheckout={calculateCheckout}
         onClear={clearCart}
@@ -944,9 +1035,13 @@ function App() {
         onDeliveryMethodChange={(method) => {
           setDeliveryMethod(method)
           setCheckoutQuote(null)
+          setPaidOrder(null)
+          setPaymentNotice(null)
         }}
+        onPay={payCheckout}
         onRefresh={loadCart}
         onRemoveItem={removeCartItem}
+        onSelectedAddressChange={setSelectedAddressId}
         onUpdateQuantity={updateCartItemQuantity}
       />
 
@@ -1133,6 +1228,7 @@ function ProductCard({
 }
 
 function CartSection({
+  addresses,
   cart,
   checkoutNotice,
   checkoutQuote,
@@ -1140,17 +1236,24 @@ function CartSection({
   isBuyer,
   isCheckoutLoading,
   isLoading,
+  isPaymentLoading,
   notice,
+  paidOrder,
+  paymentNotice,
   pendingProduct,
+  selectedAddressId,
   token,
   onCalculateCheckout,
   onClear,
   onClearAndRetry,
   onDeliveryMethodChange,
+  onPay,
   onRefresh,
   onRemoveItem,
+  onSelectedAddressChange,
   onUpdateQuantity,
 }: {
+  addresses: AddressRecord[]
   cart: CartRecord | null
   checkoutNotice: Notice
   checkoutQuote: CheckoutQuote | null
@@ -1158,19 +1261,26 @@ function CartSection({
   isBuyer: boolean
   isCheckoutLoading: boolean
   isLoading: boolean
+  isPaymentLoading: boolean
   notice: Notice
+  paidOrder: OrderRecord | null
+  paymentNotice: Notice
   pendingProduct: CatalogProduct | null
+  selectedAddressId: string
   token: string
   onCalculateCheckout: () => void
   onClear: () => void
   onClearAndRetry: () => void
   onDeliveryMethodChange: (method: DeliveryMethod) => void
+  onPay: () => void
   onRefresh: () => void
   onRemoveItem: (itemId: string) => void
+  onSelectedAddressChange: (addressId: string) => void
   onUpdateQuantity: (itemId: string, quantity: number) => void
 }) {
   const disabled = !token || !isBuyer || isLoading
   const checkoutDisabled = disabled || isCheckoutLoading || (cart?.items.length ?? 0) === 0
+  const paymentDisabled = checkoutDisabled || isPaymentLoading || !checkoutQuote || !selectedAddressId
   const items = cart?.items ?? []
 
   return (
@@ -1348,6 +1458,52 @@ function CartSection({
               disabled={checkoutDisabled}
             >
               {isCheckoutLoading ? 'Calculating' : 'Calculate checkout'}
+            </Button>
+
+            <Separator className="my-5" />
+
+            <Field id="checkoutAddress" label="Delivery address">
+              <select
+                id="checkoutAddress"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={selectedAddressId}
+                disabled={disabled || addresses.length === 0}
+                onChange={(event) => onSelectedAddressChange(event.target.value)}
+              >
+                <option value="">Select address</option>
+                {addresses.map((address) => (
+                  <option key={address.id} value={address.id}>
+                    {address.label} - {address.city}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {paymentNotice && (
+              <Alert className="mt-5" variant={paymentNotice.kind === 'success' ? 'success' : 'destructive'}>
+                {paymentNotice.message}
+              </Alert>
+            )}
+
+            {paidOrder && (
+              <div className="mt-5 rounded-md border bg-emerald-50 p-4 text-sm text-emerald-950">
+                <p className="font-semibold">{formatOrderStatus(paidOrder.status)}</p>
+                <p className="mt-1">
+                  {paidOrder.store.name} - {currency.format(paidOrder.finalTotal)}
+                </p>
+                <p className="mt-1 text-emerald-900">
+                  Ship to {paidOrder.shippingRecipientName}, {paidOrder.shippingCity}
+                </p>
+              </div>
+            )}
+
+            <Button
+              type="button"
+              className="mt-5 w-full"
+              onClick={onPay}
+              disabled={paymentDisabled}
+            >
+              {isPaymentLoading ? 'Paying' : 'Pay with wallet'}
             </Button>
           </CardContent>
         </Card>
@@ -2141,6 +2297,10 @@ function numberValue(value: FormDataEntryValue | null) {
   if (!text) return undefined
 
   return Number(text)
+}
+
+function formatOrderStatus(status: OrderRecord['status']) {
+  return status === 'SEDANG_DIKEMAS' ? 'Sedang Dikemas' : status
 }
 
 function getErrorMessage(error: unknown) {
