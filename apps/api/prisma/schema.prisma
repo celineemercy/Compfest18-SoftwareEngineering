@@ -4,6 +4,27 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DiscountType {
+  VOUCHER
+  PROMO
+}
+
+model DiscountCode {
+  id          String       @id @default(uuid())
+  code        String       @unique
+  type        DiscountType
+  discountPct Float
+  usageLimit  Int?
+  usageCount  Int          @default(0)
+  expiresAt   DateTime?
+  isActive    Boolean      @default(true)
+  orders      Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum Role {
@@ -145,8 +166,11 @@ model Order {
   deliveryMethod        DeliveryMethod
   deliveryFee           Int
   subtotal              Int
+  discount              Int            @default(0)
   ppn                   Int
   finalTotal            Int
+  discountCodeId        String?
+  discountCode          DiscountCode?  @relation(fields: [discountCodeId], references: [id])
   shippingLabel         String
   shippingRecipientName String
   shippingPhone         String
