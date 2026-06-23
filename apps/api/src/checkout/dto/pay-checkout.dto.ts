@@ -1,4 +1,4 @@
-import { IsIn, IsUUID } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
 import { DELIVERY_METHODS } from '../checkout.constants';
 import type { DeliveryMethod } from '../checkout.constants';
 
@@ -8,4 +8,8 @@ export class PayCheckoutDto {
 
   @IsUUID()
   addressId: string;
+
+  @IsOptional()
+  @IsString()
+  discountCode?: string;
 }
