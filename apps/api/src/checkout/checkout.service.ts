@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
+import { DiscountCode, OrderStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { DELIVERY_FEES, DeliveryMethod, PPN_RATE } from './checkout.constants';
@@ -38,6 +38,9 @@ const checkoutCartInclude = {
 
 type CheckoutCart = Prisma.CartGetPayload<{ include: typeof checkoutCartInclude }>;
 
+/** A minimal Prisma-like client interface used inside transactions */
+type TxClient = Omit<PrismaService, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
+
 @Injectable()
 export class CheckoutService {
   constructor(private readonly prisma: PrismaService) {}
@@ -52,7 +55,11 @@ export class CheckoutService {
       throw new BadRequestException('Cart is empty');
     }
 
-    return this.buildQuote(cart, dto.deliveryMethod);
+    const discountCode = dto.discountCode
+      ? await this.resolveDiscountCode(dto.discountCode, this.prisma)
+      : null;
+
+    return this.buildQuote(cart, dto.deliveryMethod, discountCode);
   }
 
   async pay(userId: string, dto: PayCheckoutDto) {
@@ -85,7 +92,11 @@ export class CheckoutService {
         throw new NotFoundException('Address not found');
       }
 
-      const quote = this.buildQuote(cart, dto.deliveryMethod);
+      const discountCode = dto.discountCode
+        ? await this.resolveDiscountCode(dto.discountCode, tx as unknown as TxClient)
+        : null;
+
+      const quote = this.buildQuote(cart, dto.deliveryMethod, discountCode);
 
       if (!wallet || wallet.balance < quote.finalTotal) {
         throw new BadRequestException('Insufficient wallet balance');
@@ -121,6 +132,14 @@ export class CheckoutService {
         }
       }
 
+      // Increment usage count for the voucher/promo
+      if (discountCode) {
+        await tx.discountCode.update({
+          where: { id: discountCode.id },
+          data: { usageCount: { increment: 1 } },
+        });
+      }
+
       const updatedWallet = await tx.wallet.update({
         where: { userId },
         data: {
@@ -139,8 +158,10 @@ export class CheckoutService {
           deliveryMethod: dto.deliveryMethod,
           deliveryFee: quote.deliveryFee,
           subtotal: quote.subtotal,
+          discount: quote.discount,
           ppn: quote.ppn,
           finalTotal: quote.finalTotal,
+          discountCodeId: discountCode?.id ?? null,
           shippingLabel: address.label,
           shippingRecipientName: address.recipientName,
           shippingPhone: address.phone,
@@ -182,7 +203,44 @@ export class CheckoutService {
     });
   }
 
-  private buildQuote(cart: CheckoutCart, deliveryMethod: DeliveryMethod) {
+  /**
+   * Looks up and validates a discount code.
+   * Throws BadRequestException if the code is not usable.
+   */
+  private async resolveDiscountCode(
+    code: string,
+    db: TxClient,
+  ): Promise<DiscountCode> {
+    const discountCode = await db.discountCode.findFirst({
+      where: { code: { equals: code, mode: 'insensitive' } },
+    });
+
+    if (!discountCode || !discountCode.isActive) {
+      throw new BadRequestException(`Discount code "${code}" is not valid`);
+    }
+
+    if (discountCode.expiresAt && discountCode.expiresAt < new Date()) {
+      throw new BadRequestException(`Discount code "${code}" has expired`);
+    }
+
+    if (
+      discountCode.type === 'VOUCHER' &&
+      discountCode.usageLimit !== null &&
+      discountCode.usageCount >= discountCode.usageLimit
+    ) {
+      throw new BadRequestException(
+        `Discount code "${code}" has reached its usage limit`,
+      );
+    }
+
+    return discountCode;
+  }
+
+  private buildQuote(
+    cart: CheckoutCart,
+    deliveryMethod: DeliveryMethod,
+    discountCode: DiscountCode | null = null,
+  ) {
     const items = cart.items.map((item) => ({
       id: item.id,
       productId: item.productId,
@@ -193,6 +251,9 @@ export class CheckoutService {
     }));
     const subtotal = items.reduce((total, item) => total + item.lineTotal, 0);
     const deliveryFee = DELIVERY_FEES[deliveryMethod];
+    const discount = discountCode
+      ? Math.round(subtotal * discountCode.discountPct)
+      : 0;
     const ppn = Math.round(subtotal * PPN_RATE);
 
     return {
@@ -201,9 +262,13 @@ export class CheckoutService {
       subtotal,
       deliveryMethod,
       deliveryFee,
+      discount,
+      discountCode: discountCode
+        ? { code: discountCode.code, discountPct: discountCode.discountPct }
+        : null,
       ppnRate: PPN_RATE,
       ppn,
-      finalTotal: subtotal + deliveryFee + ppn,
+      finalTotal: subtotal - discount + deliveryFee + ppn,
     };
   }
 }
