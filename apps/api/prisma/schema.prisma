@@ -42,6 +42,7 @@ enum DeliveryMethod {
 
 enum OrderStatus {
   SEDANG_DIKEMAS
+  MENUNGGU_PENGIRIM
 }
 
 model User {
