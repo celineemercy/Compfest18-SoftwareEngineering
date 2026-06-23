@@ -169,7 +169,7 @@ type OrderItemRecord = {
 
 type OrderRecord = {
   id: string
-  status: 'SEDANG_DIKEMAS'
+  status: 'SEDANG_DIKEMAS' | 'MENUNGGU_PENGIRIM'
   deliveryMethod: DeliveryMethod
   deliveryFee: number
   subtotal: number
@@ -266,10 +266,12 @@ function App() {
   const [isCartLoading, setIsCartLoading] = useState(false)
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false)
   const [isPaymentLoading, setIsPaymentLoading] = useState(false)
+  const [isOrdersLoading, setIsOrdersLoading] = useState(false)
   const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>([])
   const [sellerStores, setSellerStores] = useState<StoreRecord[]>([])
   const [selectedStoreId, setSelectedStoreId] = useState('')
   const [sellerProducts, setSellerProducts] = useState<ProductRecord[]>([])
+  const [sellerOrders, setSellerOrders] = useState<OrderRecord[]>([])
   const [editingProductId, setEditingProductId] = useState<string | null>(null)
   const [wallet, setWallet] = useState<WalletRecord | null>(null)
   const [addresses, setAddresses] = useState<AddressRecord[]>([])
@@ -279,6 +281,7 @@ function App() {
   const [checkoutQuote, setCheckoutQuote] = useState<CheckoutQuote | null>(null)
   const [selectedAddressId, setSelectedAddressId] = useState('')
   const [paidOrder, setPaidOrder] = useState<OrderRecord | null>(null)
+  const [ordersNotice, setOrdersNotice] = useState<Notice>(null)
 
   const activeRoles = useMemo(
     () => currentUser?.roles ?? [],
@@ -355,21 +358,40 @@ function App() {
     }
   }, [authHeaders, request, selectedStoreId])
 
+  const loadSellerOrders = useCallback(async function loadSellerOrders(storeId: string) {
+    setIsOrdersLoading(true)
+    setOrdersNotice(null)
+
+    try {
+      const orders = await request<OrderRecord[]>(`/orders/store/${storeId}`, {
+        headers: authHeaders(),
+      })
+      setSellerOrders(orders)
+    } catch (error) {
+      setOrdersNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsOrdersLoading(false)
+    }
+  }, [authHeaders, request])
+
   const loadSellerProducts = useCallback(async function loadSellerProducts(storeId: string) {
     setIsSellerLoading(true)
     setSellerNotice(null)
 
     try {
-      const products = await request<ProductRecord[]>(`/stores/${storeId}/products`, {
-        headers: authHeaders(),
-      })
+      const [products] = await Promise.all([
+        request<ProductRecord[]>(`/stores/${storeId}/products`, {
+          headers: authHeaders(),
+        }),
+        loadSellerOrders(storeId),
+      ])
       setSellerProducts(products)
     } catch (error) {
       setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
     } finally {
       setIsSellerLoading(false)
     }
-  }, [authHeaders, request])
+  }, [authHeaders, request, loadSellerOrders])
 
   const loadBuyerWorkspace = useCallback(async function loadBuyerWorkspace() {
     if (!token) {
@@ -600,6 +622,26 @@ function App() {
       setSellerNotice({ kind: 'error', message: getErrorMessage(error) })
     } finally {
       setIsSellerLoading(false)
+    }
+  }
+
+  async function handleProcessOrder(orderId: string) {
+    setIsOrdersLoading(true)
+    setOrdersNotice(null)
+
+    try {
+      await request<OrderRecord>(`/orders/${orderId}/process`, {
+        method: 'PATCH',
+        headers: authHeaders(),
+      })
+      setOrdersNotice({ kind: 'success', message: 'Order status updated to Menunggu Pengirim.' })
+      if (selectedStoreId) {
+        await loadSellerOrders(selectedStoreId)
+      }
+    } catch (error) {
+      setOrdersNotice({ kind: 'error', message: getErrorMessage(error) })
+    } finally {
+      setIsOrdersLoading(false)
     }
   }
 
@@ -1064,8 +1106,11 @@ function App() {
         editingProductId={editingProductId}
         isSeller={isSeller}
         isLoading={isSellerLoading}
+        isOrdersLoading={isOrdersLoading}
         notice={sellerNotice}
+        ordersNotice={ordersNotice}
         products={sellerProducts}
+        orders={sellerOrders}
         selectedStore={selectedStore}
         selectedStoreId={selectedStoreId}
         stores={sellerStores}
@@ -1074,7 +1119,9 @@ function App() {
         onCreateStore={handleCreateStore}
         onDeleteProduct={handleDeleteProduct}
         onEditProduct={setEditingProductId}
+        onProcessOrder={handleProcessOrder}
         onRefreshStores={loadStores}
+        onRefreshOrders={() => selectedStoreId && loadSellerOrders(selectedStoreId)}
         onSelectStore={(storeId) => {
           setSelectedStoreId(storeId)
           if (storeId) {
@@ -1663,8 +1710,11 @@ function SellerDashboard({
   editingProductId,
   isSeller,
   isLoading,
+  isOrdersLoading,
   notice,
+  ordersNotice,
   products,
+  orders,
   selectedStore,
   selectedStoreId,
   stores,
@@ -1673,15 +1723,20 @@ function SellerDashboard({
   onCreateStore,
   onDeleteProduct,
   onEditProduct,
+  onProcessOrder,
   onRefreshStores,
+  onRefreshOrders,
   onSelectStore,
   onUpdateProduct,
 }: {
   editingProductId: string | null
   isSeller: boolean
   isLoading: boolean
+  isOrdersLoading: boolean
   notice: Notice
+  ordersNotice: Notice
   products: ProductRecord[]
+  orders: OrderRecord[]
   selectedStore?: StoreRecord
   selectedStoreId: string
   stores: StoreRecord[]
@@ -1690,10 +1745,14 @@ function SellerDashboard({
   onCreateStore: (event: FormEvent<HTMLFormElement>) => void
   onDeleteProduct: (productId: string) => void
   onEditProduct: (productId: string | null) => void
+  onProcessOrder: (orderId: string) => void
   onRefreshStores: () => void
+  onRefreshOrders: () => void
   onSelectStore: (storeId: string) => void
   onUpdateProduct: (event: FormEvent<HTMLFormElement>, productId: string) => void
 }) {
+  const pendingOrders = orders.filter((o) => o.status === 'SEDANG_DIKEMAS')
+  const processedOrders = orders.filter((o) => o.status === 'MENUNGGU_PENGIRIM')
   return (
     <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
@@ -1834,6 +1893,92 @@ function SellerDashboard({
                 </CardContent>
               </Card>
             ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-12">
+        <div className="flex items-center justify-between gap-4">
+          <h3 className="text-2xl font-semibold tracking-normal">Incoming orders</h3>
+          <Button variant="outline" size="sm" onClick={onRefreshOrders} disabled={!selectedStoreId || isOrdersLoading}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh orders
+          </Button>
+        </div>
+
+        {ordersNotice && (
+          <Alert className="mt-4" variant={ordersNotice.kind === 'success' ? 'success' : 'destructive'}>
+            {ordersNotice.message}
+          </Alert>
+        )}
+
+        {!selectedStoreId ? (
+          <Alert className="mt-4">Select a store to view its orders.</Alert>
+        ) : pendingOrders.length === 0 && processedOrders.length === 0 ? (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>No orders yet</CardTitle>
+              <CardDescription>When customers buy from this store, they will appear here.</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <div className="mt-6 grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="grid gap-4 self-start">
+              <h4 className="font-medium text-muted-foreground uppercase tracking-wider text-xs">New (Sedang Dikemas)</h4>
+              {pendingOrders.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">No new orders.</p>
+              ) : (
+                pendingOrders.map((order) => (
+                  <Card key={order.id} className="border-emerald-100 bg-emerald-50/20">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <CardTitle className="text-base">Order #{order.id.slice(0, 8)}</CardTitle>
+                          <CardDescription>{new Date(order.createdAt).toLocaleString()}</CardDescription>
+                        </div>
+                        <p className="text-lg font-bold">{currency.format(order.finalTotal)}</p>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-sm">
+                        <p className="font-medium">{order.shippingRecipientName}</p>
+                        <p className="text-muted-foreground">{order.shippingStreet}, {order.shippingCity}</p>
+                      </div>
+                      <div className="mt-4 flex items-center justify-between border-t pt-4">
+                        <span className="text-xs font-medium text-muted-foreground">{order.items.length} items</span>
+                        <Button size="sm" onClick={() => onProcessOrder(order.id)} disabled={isOrdersLoading}>
+                          {isOrdersLoading ? 'Processing' : 'Process order'}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+            </div>
+
+            <div className="grid gap-4 self-start">
+              <h4 className="font-medium text-muted-foreground uppercase tracking-wider text-xs">History (Menunggu Pengirim)</h4>
+              {processedOrders.length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">No processed orders.</p>
+              ) : (
+                processedOrders.map((order) => (
+                  <Card key={order.id}>
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <CardTitle className="text-base font-medium">Order #{order.id.slice(0, 8)}</CardTitle>
+                          <CardDescription>{new Date(order.createdAt).toLocaleDateString()}</CardDescription>
+                        </div>
+                        <Badge variant="outline">Done</Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-sm text-muted-foreground">{order.shippingRecipientName} - {currency.format(order.finalTotal)}</p>
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -2300,7 +2445,9 @@ function numberValue(value: FormDataEntryValue | null) {
 }
 
 function formatOrderStatus(status: OrderRecord['status']) {
-  return status === 'SEDANG_DIKEMAS' ? 'Sedang Dikemas' : status
+  if (status === 'SEDANG_DIKEMAS') return 'Sedang Dikemas'
+  if (status === 'MENUNGGU_PENGIRIM') return 'Menunggu Pengirim'
+  return status
 }
 
 function getErrorMessage(error: unknown) {
