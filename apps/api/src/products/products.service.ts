@@ -27,6 +27,27 @@ export class ProductsService {
     });
   }
 
+  async findPublic(storeId?: string) {
+    return this.prisma.product.findMany({
+      where: storeId ? { storeId } : undefined,
+      include: { store: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findPublicOne(productId: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      include: { store: true },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    return product;
+  }
+
   async findOne(sellerId: string, productId: string) {
     return this.findSellerProductOrThrow(sellerId, productId);
   }
