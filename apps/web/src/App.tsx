@@ -13,6 +13,7 @@ import {
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DriverDeliveryWorkspace } from '@/components/DriverDeliveryWorkspace'
 import {
   Card,
   CardContent,
