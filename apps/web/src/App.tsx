@@ -702,6 +702,42 @@ function SellerPanel(props: {
           <Button type="submit">Create product in {firstStore.name}</Button>
         </form>
       )}
+      {firstStore && (firstStore.products?.length ?? 0) > 0 && (
+        <div className="grid gap-3">
+          <h3 className="font-semibold">Products in {firstStore.name}</h3>
+          {firstStore.products!.map((product) => (
+            <div key={product.id} className="grid gap-2 rounded-md border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span>{product.name} - {formatMoney(product.price)} - stock {product.stock}</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    void run('Product deleted.', async () => {
+                      await request(`/products/${product.id}`, { method: 'DELETE', headers: authHeaders })
+                      await refresh()
+                    })
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+              <form
+                className="grid gap-2 md:grid-cols-4"
+                onSubmit={(event) => submitJson(event, run, 'Product updated.', async (body) => {
+                  await request(`/products/${product.id}`, { method: 'PATCH', headers: authHeaders, body })
+                  await refresh()
+                })}
+              >
+                <Input name="name" placeholder="Name" defaultValue={product.name} />
+                <Input name="price" type="number" min={1} placeholder="Price" defaultValue={product.price} />
+                <Input name="stock" type="number" min={0} placeholder="Stock" defaultValue={product.stock} />
+                <Button type="submit" size="sm">Update</Button>
+              </form>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid gap-3">
         {orders.map((order) => (
           <div key={order.id} className="rounded-md border p-3">
