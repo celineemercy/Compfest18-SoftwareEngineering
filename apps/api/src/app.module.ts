@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { StoresModule } from './stores/stores.module';
 import { ProductsModule } from './products/products.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
+import { CatalogModule } from './catalog/catalog.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { MarketplaceModule } from './marketplace/marketplace.module';
     StoresModule,
     ProductsModule,
     MarketplaceModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [AppService],

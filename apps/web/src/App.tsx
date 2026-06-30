@@ -23,7 +23,6 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -97,25 +96,37 @@ type DeliveryJob = {
   earning: number
   order: Order
 }
-type AdminMonitoring = {
-  clock?: string
-  users?: number
-  stores?: number
-  products?: number
-  orders?: number
-  vouchers?: number
-  promos?: number
-  deliveryJobs?: number
-  overdueOrders?: number
+type WalletTransaction = {
+  id: string
+  type: string
+  amount: number
+  note?: string
+  createdAt: string
 }
-type OverdueProcessResult = {
-  processedCount: number
-  orderIds: string[]
+type BuyerSpendingReport = {
+  orderCount: number
+  completedOrders: number
+  totalSpent: number
+  totalDiscount: number
 }
-type AdminActionResult =
-  | { kind: 'time'; clock?: string }
-  | { kind: 'overdue'; processedCount: number; orderIds: string[] }
-  | null
+type SellerIncomeReport = {
+  orderCount: number
+  completedOrders: number
+  grossIncome: number
+}
+type DriverEarningsReport = {
+  total: number
+  earnings: Array<{ id: string; amount: number; createdAt: string }>
+}
+type DiscountResource = {
+  id: string
+  code: string
+  type: string
+  amount: number
+  remainingUsage?: number
+  expiresAt: string
+  isActive: boolean
+}
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const roleOptions: Role[] = ['BUYER', 'SELLER', 'DRIVER', 'ADMIN']
@@ -135,15 +146,19 @@ function App() {
   const [reviews, setReviews] = useState<Review[]>([])
   const [stores, setStores] = useState<StoreResource[]>([])
   const [wallet, setWallet] = useState<{ balance: number } | null>(null)
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([])
   const [addresses, setAddresses] = useState<Address[]>([])
   const [cart, setCart] = useState<Cart | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
+  const [buyerReport, setBuyerReport] = useState<BuyerSpendingReport | null>(null)
   const [sellerOrders, setSellerOrders] = useState<Order[]>([])
+  const [sellerReport, setSellerReport] = useState<SellerIncomeReport | null>(null)
   const [jobs, setJobs] = useState<DeliveryJob[]>([])
   const [driverJobs, setDriverJobs] = useState<DeliveryJob[]>([])
-  const [monitoring, setMonitoring] = useState<AdminMonitoring | null>(null)
-  const [vouchers, setVouchers] = useState<unknown[]>([])
-  const [promos, setPromos] = useState<unknown[]>([])
+  const [driverEarnings, setDriverEarnings] = useState<DriverEarningsReport | null>(null)
+  const [monitoring, setMonitoring] = useState<Record<string, unknown> | null>(null)
+  const [vouchers, setVouchers] = useState<DiscountResource[]>([])
+  const [promos, setPromos] = useState<DiscountResource[]>([])
 
   const activeRole = user?.activeRole
   const authHeaders = useMemo<Record<string, string>>(
@@ -202,34 +217,49 @@ function App() {
 
   async function loadRoleData(role: Role) {
     if (role === 'BUYER') {
-      const [nextWallet, nextAddresses, nextCart, nextOrders] = await Promise.all([
+      const [
+        nextWallet,
+        nextTransactions,
+        nextAddresses,
+        nextCart,
+        nextOrders,
+        nextReport,
+      ] = await Promise.all([
         request<{ balance: number }>('/buyer/wallet', { headers: authHeaders }),
+        request<WalletTransaction[]>('/buyer/wallet/transactions', { headers: authHeaders }),
         request<Address[]>('/buyer/addresses', { headers: authHeaders }),
         request<Cart>('/buyer/cart', { headers: authHeaders }),
         request<Order[]>('/buyer/orders', { headers: authHeaders }),
+        request<BuyerSpendingReport>('/buyer/reports/spending', { headers: authHeaders }),
       ])
       setWallet(nextWallet)
+      setWalletTransactions(nextTransactions)
       setAddresses(nextAddresses)
       setCart(nextCart)
       setOrders(nextOrders)
+      setBuyerReport(nextReport)
     }
 
     if (role === 'SELLER') {
-      const [nextStores, nextOrders] = await Promise.all([
+      const [nextStores, nextOrders, nextReport] = await Promise.all([
         request<StoreResource[]>('/stores/me', { headers: authHeaders }),
         request<Order[]>('/seller/orders', { headers: authHeaders }),
+        request<SellerIncomeReport>('/seller/reports/income', { headers: authHeaders }),
       ])
       setStores(nextStores)
       setSellerOrders(nextOrders)
+      setSellerReport(nextReport)
     }
 
     if (role === 'DRIVER') {
-      const [nextJobs, mine] = await Promise.all([
+      const [nextJobs, mine, nextEarnings] = await Promise.all([
         request<DeliveryJob[]>('/driver/jobs/available', { headers: authHeaders }),
         request<DeliveryJob[]>('/driver/jobs', { headers: authHeaders }),
+        request<DriverEarningsReport>('/driver/earnings', { headers: authHeaders }),
       ])
       setJobs(nextJobs)
       setDriverJobs(mine)
+      setDriverEarnings(nextEarnings)
     }
 
     if (role === 'ADMIN') {
@@ -336,9 +366,11 @@ function App() {
           {activeRole === 'BUYER' && (
             <BuyerPanel
               wallet={wallet}
+              walletTransactions={walletTransactions}
               addresses={addresses}
               cart={cart}
               orders={orders}
+              report={buyerReport}
               run={run}
               refresh={() => loadRoleData('BUYER')}
               request={request}
@@ -350,6 +382,7 @@ function App() {
             <SellerPanel
               stores={stores}
               orders={sellerOrders}
+              report={sellerReport}
               run={run}
               refresh={() => loadRoleData('SELLER')}
               request={request}
@@ -361,6 +394,7 @@ function App() {
             <DriverPanel
               jobs={jobs}
               driverJobs={driverJobs}
+              earnings={driverEarnings}
               run={run}
               refresh={() => loadRoleData('DRIVER')}
               request={request}
@@ -567,19 +601,26 @@ function PublicCatalog({
 
 function BuyerPanel(props: {
   wallet: { balance: number } | null
+  walletTransactions: WalletTransaction[]
   addresses: Address[]
   cart: Cart | null
   orders: Order[]
+  report: BuyerSpendingReport | null
   run: (message: string, action: () => Promise<void>) => Promise<void>
   refresh: () => Promise<void>
   request: <T>(path: string, options?: RequestInit) => Promise<T>
   authHeaders: Record<string, string>
 }) {
-  const { wallet, addresses, cart, orders, run, refresh, request, authHeaders } = props
+  const { wallet, walletTransactions, addresses, cart, orders, report, run, refresh, request, authHeaders } = props
 
   return (
     <Dashboard title="Buyer dashboard" icon={<CircleDollarSign className="h-5 w-5" />}>
-      <Metric label="Wallet" value={formatMoney(wallet?.balance ?? 0)} />
+      <div className="grid gap-3 md:grid-cols-4">
+        <Metric label="Wallet" value={formatMoney(wallet?.balance ?? 0)} />
+        <Metric label="Orders" value={String(report?.orderCount ?? 0)} />
+        <Metric label="Completed" value={String(report?.completedOrders ?? 0)} />
+        <Metric label="Spent" value={formatMoney(report?.totalSpent ?? 0)} />
+      </div>
       <form className="grid gap-3" onSubmit={(event) => submitJson(event, run, 'Wallet topped up.', async (body) => {
         await request('/buyer/wallet/top-up', { method: 'POST', headers: authHeaders, body })
         await refresh()
@@ -627,6 +668,15 @@ function BuyerPanel(props: {
         <Input name="discountCode" placeholder="Discount code optional" />
         <Button type="submit" disabled={!cart?.items?.length}>Checkout</Button>
       </form>
+      <TimelineList
+        title="Wallet transactions"
+        empty="No wallet transactions yet."
+        items={walletTransactions.slice(0, 5).map((transaction) => ({
+          id: transaction.id,
+          label: `${transaction.type} ${formatMoney(transaction.amount)}`,
+          meta: transaction.note || formatDate(transaction.createdAt),
+        }))}
+      />
       <OrderList orders={orders} />
     </Dashboard>
   )
@@ -635,16 +685,22 @@ function BuyerPanel(props: {
 function SellerPanel(props: {
   stores: StoreResource[]
   orders: Order[]
+  report: SellerIncomeReport | null
   run: (message: string, action: () => Promise<void>) => Promise<void>
   refresh: () => Promise<void>
   request: <T>(path: string, options?: RequestInit) => Promise<T>
   authHeaders: Record<string, string>
 }) {
-  const { stores, orders, run, refresh, request, authHeaders } = props
+  const { stores, orders, report, run, refresh, request, authHeaders } = props
   const firstStore = stores[0]
 
   return (
     <Dashboard title="Seller dashboard" icon={<Store className="h-5 w-5" />}>
+      <div className="grid gap-3 md:grid-cols-3">
+        <Metric label="Orders" value={String(report?.orderCount ?? 0)} />
+        <Metric label="Completed" value={String(report?.completedOrders ?? 0)} />
+        <Metric label="Gross income" value={formatMoney(report?.grossIncome ?? 0)} />
+      </div>
       <form className="grid gap-3" onSubmit={(event) => submitJson(event, run, 'Store saved.', async (body) => {
         await request('/stores', { method: 'POST', headers: authHeaders, body })
         await refresh()
@@ -665,6 +721,42 @@ function SellerPanel(props: {
           <Input name="imageUrl" placeholder="Image URL optional" />
           <Button type="submit">Create product in {firstStore.name}</Button>
         </form>
+      )}
+      {firstStore && (firstStore.products?.length ?? 0) > 0 && (
+        <div className="grid gap-3">
+          <h3 className="font-semibold">Products in {firstStore.name}</h3>
+          {firstStore.products!.map((product) => (
+            <div key={product.id} className="grid gap-2 rounded-md border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span>{product.name} - {formatMoney(product.price)} - stock {product.stock}</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    void run('Product deleted.', async () => {
+                      await request(`/products/${product.id}`, { method: 'DELETE', headers: authHeaders })
+                      await refresh()
+                    })
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+              <form
+                className="grid gap-2 md:grid-cols-4"
+                onSubmit={(event) => submitJson(event, run, 'Product updated.', async (body) => {
+                  await request(`/products/${product.id}`, { method: 'PATCH', headers: authHeaders, body })
+                  await refresh()
+                })}
+              >
+                <Input name="name" placeholder="Name" defaultValue={product.name} />
+                <Input name="price" type="number" min={1} placeholder="Price" defaultValue={product.price} />
+                <Input name="stock" type="number" min={0} placeholder="Stock" defaultValue={product.stock} />
+                <Button type="submit" size="sm">Update</Button>
+              </form>
+            </div>
+          ))}
+        </div>
       )}
       <div className="grid gap-3">
         {orders.map((order) => (
@@ -691,14 +783,19 @@ function SellerPanel(props: {
 function DriverPanel(props: {
   jobs: DeliveryJob[]
   driverJobs: DeliveryJob[]
+  earnings: DriverEarningsReport | null
   run: (message: string, action: () => Promise<void>) => Promise<void>
   refresh: () => Promise<void>
   request: <T>(path: string, options?: RequestInit) => Promise<T>
   authHeaders: Record<string, string>
 }) {
-  const { jobs, driverJobs, run, refresh, request, authHeaders } = props
+  const { jobs, driverJobs, earnings, run, refresh, request, authHeaders } = props
   return (
     <Dashboard title="Driver dashboard" icon={<Truck className="h-5 w-5" />}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Metric label="Total earnings" value={formatMoney(earnings?.total ?? 0)} />
+        <Metric label="Completed jobs" value={String(earnings?.earnings.length ?? 0)} />
+      </div>
       <h3 className="font-semibold">Available jobs</h3>
       {jobs.map((job) => (
         <div key={job.id} className="flex items-center justify-between rounded-md border p-3">
@@ -723,6 +820,15 @@ function DriverPanel(props: {
           }}>Complete</Button>
         </div>
       ))}
+      <TimelineList
+        title="Earning history"
+        empty="No earnings yet."
+        items={(earnings?.earnings ?? []).slice(0, 5).map((earning) => ({
+          id: earning.id,
+          label: formatMoney(earning.amount),
+          meta: formatDate(earning.createdAt),
+        }))}
+      />
     </Dashboard>
   )
 }
@@ -829,6 +935,24 @@ function AdminPanel(props: {
       <p className="text-sm text-muted-foreground">
         Vouchers: {vouchers.length} | Promos: {promos.length}
       </p>
+      <TimelineList
+        title="Voucher codes"
+        empty="No vouchers yet."
+        items={vouchers.slice(0, 5).map((voucher) => ({
+          id: voucher.id,
+          label: `${voucher.code} - ${voucher.type} ${voucher.amount}`,
+          meta: `${voucher.remainingUsage ?? 0} uses left, expires ${formatDate(voucher.expiresAt)}`,
+        }))}
+      />
+      <TimelineList
+        title="Promo codes"
+        empty="No promos yet."
+        items={promos.slice(0, 5).map((promo) => ({
+          id: promo.id,
+          label: `${promo.code} - ${promo.type} ${promo.amount}`,
+          meta: `Expires ${formatDate(promo.expiresAt)}`,
+        }))}
+      />
     </Dashboard>
   )
 }
@@ -916,6 +1040,29 @@ function EmptyState({ children }: { children: ReactNode }) {
   return <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">{children}</p>
 }
 
+function TimelineList({
+  title,
+  empty,
+  items,
+}: {
+  title: string
+  empty: string
+  items: Array<{ id: string; label: string; meta: string }>
+}) {
+  return (
+    <div className="grid gap-3">
+      <h3 className="font-semibold">{title}</h3>
+      {items.length === 0 && <EmptyState>{empty}</EmptyState>}
+      {items.map((item) => (
+        <div key={item.id} className="rounded-md border p-3">
+          <p className="font-medium">{item.label}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{item.meta}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 async function submitJson(
   event: FormEvent<HTMLFormElement>,
   run: (message: string, action: () => Promise<void>) => Promise<void>,
@@ -960,27 +1107,11 @@ function formatMoney(value: number) {
   }).format(value)
 }
 
-function formatDateTime(value?: string) {
-  if (!value) return 'n/a'
-
+function formatDate(value: string) {
   return new Intl.DateTimeFormat('id-ID', {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value))
-}
-
-function formatMonitoringLabel(label: string) {
-  return label
-    .replace(/([A-Z])/g, ' $1')
-    .replace(/^./, (char) => char.toUpperCase())
-}
-
-function formatMonitoringValue(key: string, value: unknown) {
-  if (key === 'clock' && typeof value === 'string') {
-    return formatDateTime(value)
-  }
-
-  return String(value)
 }
 
 function getErrorMessage(error: unknown) {
