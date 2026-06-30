@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import type { FormEvent } from 'react'
 import {
   ArrowRight,
   BadgeCheck,
@@ -7,6 +7,7 @@ import {
   ClipboardCheck,
   LockKeyhole,
   ShieldCheck,
+  ShoppingCart,
   Sparkles,
   Star,
   Store,
@@ -24,10 +25,14 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { apiRequest, getErrorMessage } from '@/lib/api'
+import { AdminDiscountWorkspace } from '@/components/AdminDiscountWorkspace'
+import { BuyerWorkspace } from '@/components/BuyerWorkspace'
+import { Field } from '@/components/Field'
+import { SellerOrderWorkspace } from '@/components/SellerOrderWorkspace'
 import heroImg from './assets/hero.png'
 
 type Role = 'ADMIN' | 'SELLER' | 'BUYER' | 'DRIVER'
@@ -48,8 +53,6 @@ type AuthResponse = {
 
 type AuthMode = 'login' | 'register'
 type Notice = { kind: 'success' | 'error'; message: string } | null
-
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 
 const marketplaceItems = [
   {
@@ -92,28 +95,6 @@ function App() {
     [currentUser],
   )
 
-  async function request<T>(path: string, options: RequestInit = {}) {
-    const response = await fetch(`${API_URL}${path}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      ...options,
-    })
-
-    const data = await response.json().catch(() => null)
-
-    if (!response.ok) {
-      const message =
-        data?.message instanceof Array
-          ? data.message.join(', ')
-          : data?.message || 'Request failed'
-      throw new Error(message)
-    }
-
-    return data as T
-  }
-
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -121,7 +102,7 @@ function App() {
     setAuthNotice(null)
 
     try {
-      const data = await request<AuthResponse>('/auth/login', {
+      const data = await apiRequest<AuthResponse>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({
           email: form.get('email'),
@@ -147,7 +128,7 @@ function App() {
     setAuthNotice(null)
 
     try {
-      const user = await request<AuthUser>('/auth/register', {
+      const user = await apiRequest<AuthUser>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({
           email: form.get('email'),
@@ -178,7 +159,7 @@ function App() {
     setAuthNotice(null)
 
     try {
-      const user = await request<AuthUser>('/auth/me', {
+      const user = await apiRequest<AuthUser>('/auth/me', {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -406,6 +387,61 @@ function App() {
         </div>
       </section>
 
+      {token && activeRoles.includes('BUYER') && (
+        <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+          <Badge variant="secondary" className="mb-4 gap-1.5">
+            <ShoppingCart className="h-3.5 w-3.5" />
+            Buyer workspace
+          </Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">
+            Wallet, addresses, cart, and checkout.
+          </h2>
+          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+            Everything a buyer needs to top up their wallet, manage delivery addresses,
+            build a cart from the public catalog, and check out against Level 3 endpoints.
+          </p>
+          <div className="mt-7">
+            <BuyerWorkspace token={token} />
+          </div>
+        </section>
+      )}
+
+      {token && activeRoles.includes('ADMIN') && (
+        <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+          <Badge variant="secondary" className="mb-4 gap-1.5">
+            <Sparkles className="h-3.5 w-3.5" />
+            Level 4 discounts
+          </Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">
+            Create vouchers and promos.
+          </h2>
+          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+            Admins can create voucher codes with limited usage and promo codes for checkout.
+          </p>
+          <div className="mt-7">
+            <AdminDiscountWorkspace token={token} />
+          </div>
+        </section>
+      )}
+
+      {token && activeRoles.includes('SELLER') && (
+        <section className="mx-auto max-w-7xl px-5 py-10 md:px-8 lg:px-10">
+          <Badge variant="secondary" className="mb-4 gap-1.5">
+            <Store className="h-3.5 w-3.5" />
+            Level 4 seller flow
+          </Badge>
+          <h2 className="text-3xl font-semibold tracking-normal">
+            Process incoming orders and review income.
+          </h2>
+          <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">
+            Sellers can list their own store orders, process packed orders, and inspect income.
+          </p>
+          <div className="mt-7">
+            <SellerOrderWorkspace token={token} />
+          </div>
+        </section>
+      )}
+
       <section className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[1fr_0.95fr] lg:px-10">
         <div>
           <Badge variant="secondary" className="mb-4 gap-1.5">
@@ -494,27 +530,6 @@ function App() {
       </section>
     </main>
   )
-}
-
-function Field({
-  id,
-  label,
-  children,
-}: {
-  id: string
-  label: string
-  children: ReactNode
-}) {
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      {children}
-    </div>
-  )
-}
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Something went wrong'
 }
 
 export default App
