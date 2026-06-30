@@ -64,3 +64,7 @@ After login, select an active role before using private features. Backend guards
 - Driver job claiming prevents a second driver from claiming the same job.
 - Overdue processing can run multiple times without double refunding or double restoring stock.
 - Public review text containing HTML/script content renders as text in the React UI.
+
+## Level 7 Verification Evidence
+
+See `docs/level-7-verification-evidence.md` for the follow-up evidence branch notes, added automated coverage, command status, manual checklist status, and known limitations.

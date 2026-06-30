@@ -16,7 +16,11 @@ export function ActiveRoleGuard(...allowedRoles: Role[]): Type<CanActivate> {
       const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
       const activeRole = request.user.activeRole;
 
-      if (!activeRole || !allowedRoles.includes(activeRole)) {
+      if (
+        !activeRole ||
+        !request.user.roles.includes(activeRole) ||
+        !allowedRoles.includes(activeRole)
+      ) {
         throw new ForbiddenException(
           `${allowedRoles.join(' or ')} active role required`,
         );
