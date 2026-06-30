@@ -3,8 +3,10 @@ import type { FormEvent, ReactNode } from 'react'
 import {
   BadgeCheck,
   CircleDollarSign,
+  Clock3,
   ClipboardCheck,
   Package,
+  RefreshCw,
   ShieldCheck,
   Store,
   Truck,
@@ -83,6 +85,8 @@ type Order = {
   deliveryFee: number
   finalTotal: number
   deliveryMethod: DeliveryMethod
+  dueAt?: string
+  returnedAt?: string
   store?: StoreResource
   histories?: Array<{ id: string; status: string; note?: string; createdAt: string }>
   deliveryJob?: { id: string; status: string; earning: number }
@@ -128,6 +132,12 @@ type DiscountResource = {
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 const roleOptions: Role[] = ['BUYER', 'SELLER', 'DRIVER', 'ADMIN']
 const deliveryOptions: DeliveryMethod[] = ['REGULAR', 'NEXT_DAY', 'INSTANT']
+const demoAccounts = [
+  { role: 'BUYER', email: 'buyer.demo@seapedia.test', password: 'Demo123!' },
+  { role: 'SELLER', email: 'seller.demo@seapedia.test', password: 'Demo123!' },
+  { role: 'DRIVER', email: 'driver.demo@seapedia.test', password: 'Demo123!' },
+  { role: 'ADMIN', email: 'admin.demo@seapedia.test', password: 'Demo123!' },
+]
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('accessToken') ?? '')
@@ -255,7 +265,7 @@ function App() {
 
     if (role === 'ADMIN') {
       const [nextMonitoring, nextVouchers, nextPromos] = await Promise.all([
-        request<Record<string, unknown>>('/admin/monitoring', { headers: authHeaders }),
+        request<AdminMonitoring>('/admin/monitoring', { headers: authHeaders }),
         request<unknown[]>('/admin/vouchers', { headers: authHeaders }),
         request<unknown[]>('/admin/promos', { headers: authHeaders }),
       ])
@@ -315,10 +325,10 @@ function App() {
             <div className="flex items-center gap-2">
               <Store className="h-6 w-6 text-emerald-700" />
               <h1 className="text-2xl font-semibold tracking-normal">SEAPEDIA</h1>
-              <Badge variant="secondary">Level 7 Demo</Badge>
+              <Badge variant="secondary">Level 6 Demo</Badge>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Public marketplace, active-role dashboards, checkout, delivery, and admin operations.
+              Level 6 demo evidence for role-aware dashboards, admin monitoring, time advance, and overdue refunds.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -429,6 +439,17 @@ function AuthPanel({
         <CardDescription>Login first, then choose exactly one role for protected actions.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
+        <div className="rounded-md border bg-muted/40 p-3">
+          <p className="text-sm font-semibold">Demo accounts</p>
+          <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
+            {demoAccounts.map((account) => (
+              <div key={account.email} className="rounded-md bg-white p-2">
+                <span className="font-semibold">{account.role}</span>
+                <p className="text-muted-foreground">{account.email} / {account.password}</p>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="grid gap-4 md:grid-cols-2">
           <AuthForm mode="login" onSubmit={onAuth} />
           <AuthForm mode="register" onSubmit={onAuth} />
@@ -750,6 +771,9 @@ function SellerPanel(props: {
                 })
               }}>Process</Button>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Due {formatDateTime(order.dueAt)} | Delivery {order.deliveryJob?.status ?? 'not created'}
+            </p>
           </div>
         ))}
       </div>
@@ -811,7 +835,7 @@ function DriverPanel(props: {
 }
 
 function AdminPanel(props: {
-  monitoring: Record<string, unknown> | null
+  monitoring: AdminMonitoring | null
   vouchers: unknown[]
   promos: unknown[]
   run: (message: string, action: () => Promise<void>) => Promise<void>
@@ -820,13 +844,46 @@ function AdminPanel(props: {
   authHeaders: Record<string, string>
 }) {
   const { monitoring, vouchers, promos, run, refresh, request, authHeaders } = props
+  const [actionResult, setActionResult] = useState<AdminActionResult>(null)
+  const monitoringEntries = monitoring
+    ? Object.entries(monitoring).filter(([, value]) => value !== undefined)
+    : []
 
   return (
     <Dashboard title="Admin dashboard" icon={<ShieldCheck className="h-5 w-5" />}>
+      <div className="rounded-md border border-dashed p-3 text-sm">
+        <p className="font-semibold">Level 6 endpoint proof</p>
+        <p className="mt-1 text-muted-foreground">
+          This dashboard loads <code>GET /admin/monitoring</code>, advances demo time with <code>POST /admin/time/advance</code>, and runs overdue refunds with <code>POST /admin/overdue/process</code>.
+        </p>
+      </div>
       <div className="grid gap-3 md:grid-cols-4">
-        {monitoring && Object.entries(monitoring).map(([key, value]) => (
-          <Metric key={key} label={key} value={String(value)} />
+        {monitoringEntries.map(([key, value]) => (
+          <Metric key={key} label={formatMonitoringLabel(key)} value={formatMonitoringValue(key, value)} />
         ))}
+        {!monitoring && <EmptyState>Monitoring data has not loaded yet.</EmptyState>}
+      </div>
+      <div className="rounded-md border p-4">
+        <div className="flex items-center gap-2">
+          <Clock3 className="h-4 w-4 text-primary" />
+          <h3 className="font-semibold">Overdue acceptance flow</h3>
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Watch the clock and overdue order count, advance time, then process overdue orders. The result below records how many orders were refunded and which order ids were touched.
+        </p>
+        {actionResult && (
+          <div className="mt-3 rounded-md bg-muted p-3 text-sm">
+            {actionResult.kind === 'time' && (
+              <p>Last action: demo clock advanced to {formatDateTime(actionResult.clock)}.</p>
+            )}
+            {actionResult.kind === 'overdue' && (
+              <p>
+                Last action: processed {actionResult.processedCount} overdue order(s)
+                {actionResult.orderIds.length > 0 ? `: ${actionResult.orderIds.map((id) => id.slice(0, 8)).join(', ')}` : '.'}
+              </p>
+            )}
+          </div>
+        )}
       </div>
       <form className="grid gap-3" onSubmit={(event) => submitJson(event, run, 'Voucher created.', async (body) => {
         await request('/admin/vouchers', { method: 'POST', headers: authHeaders, body })
@@ -853,20 +910,28 @@ function AdminPanel(props: {
       <div className="flex flex-wrap gap-3">
         <Button onClick={() => {
           void run('Time advanced.', async () => {
-            await request('/admin/time/advance', {
+            const result = await request<{ currentAt?: string }>('/admin/time/advance', {
               method: 'POST',
               headers: authHeaders,
               body: JSON.stringify({ days: 1 }),
             })
+            setActionResult({ kind: 'time', clock: result.currentAt })
             await refresh()
           })
-        }}>Advance 1 day</Button>
+        }}>
+          <Clock3 className="h-4 w-4" />
+          Advance 1 day
+        </Button>
         <Button variant="secondary" onClick={() => {
           void run('Overdue processor completed.', async () => {
-            await request('/admin/overdue/process', { method: 'POST', headers: authHeaders })
+            const result = await request<OverdueProcessResult>('/admin/overdue/process', { method: 'POST', headers: authHeaders })
+            setActionResult({ kind: 'overdue', ...result })
             await refresh()
           })
-        }}>Process overdue</Button>
+        }}>
+          <RefreshCw className="h-4 w-4" />
+          Process overdue
+        </Button>
       </div>
       <p className="text-sm text-muted-foreground">
         Vouchers: {vouchers.length} | Promos: {promos.length}
@@ -935,6 +1000,19 @@ function OrderList({ orders }: { orders: Order[] }) {
           <p className="mt-1 text-sm text-muted-foreground">
             Subtotal {formatMoney(order.subtotal)} | Discount {formatMoney(order.discountAmount)} | PPN {formatMoney(order.ppnAmount)} | Delivery {formatMoney(order.deliveryFee)}
           </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Due {formatDateTime(order.dueAt)} | Delivery job {order.deliveryJob?.status ?? 'not created'}
+            {order.returnedAt ? ` | Returned ${formatDateTime(order.returnedAt)}` : ''}
+          </p>
+          {order.histories && order.histories.length > 0 && (
+            <div className="mt-3 grid gap-1 text-xs text-muted-foreground">
+              {order.histories.slice(-3).map((history) => (
+                <p key={history.id}>
+                  {formatDateTime(history.createdAt)} - {history.status}{history.note ? `: ${history.note}` : ''}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>
