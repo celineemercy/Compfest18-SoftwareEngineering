@@ -1,0 +1,11 @@
+.git
+.env
+node_modules
+dist
+coverage
+.tmp
+.temp
+apps/*/node_modules
+apps/*/dist
+apps/*/coverage
+npm-debug.log*
