@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { User } from '@prisma/client';
+import { Role, User } from '@prisma/client';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -40,16 +40,35 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    const payload = {
+    return {
+      accessToken: await this.signToken(user),
+      user: this.excludePassword(user),
+    };
+  }
+
+  async selectRole(userId: string, role: Role) {
+    const user = await this.usersService.findById(userId);
+
+    if (!user || !user.roles.includes(role)) {
+      throw new UnauthorizedException('Role is not available for this user');
+    }
+
+    return {
+      accessToken: await this.signToken(user, role),
+      user: {
+        ...this.excludePassword(user),
+        activeRole: role,
+      },
+    };
+  }
+
+  private signToken(user: User, activeRole?: Role) {
+    return this.jwtService.signAsync({
       sub: user.id,
       email: user.email,
       roles: user.roles,
-    };
-
-    return {
-      accessToken: await this.jwtService.signAsync(payload),
-      user: this.excludePassword(user),
-    };
+      activeRole,
+    });
   }
 
   private excludePassword(user: User) {

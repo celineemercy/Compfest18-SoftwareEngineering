@@ -6,6 +6,7 @@ export type AuthUser = {
   email: string;
   username: string;
   roles: Role[];
+  activeRole?: Role;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -14,6 +15,7 @@ export type JwtPayload = {
   sub: string;
   email: string;
   roles: Role[];
+  activeRole?: Role;
 };
 
 export type AuthenticatedRequest = Request & {

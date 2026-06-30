@@ -26,11 +26,14 @@ export class UsersService {
     const existingUser = await this.findByUsername(data.username);
     if (existingUser) throw new ConflictException('Username already taken');
 
-    // 2. Create the user with default BUYER role if none provided
+    const roles = data.roles || [Role.BUYER];
+
     return this.prisma.user.create({
       data: {
         ...data,
-        roles: data.roles || [Role.BUYER],
+        roles,
+        wallet: roles.includes(Role.BUYER) ? { create: {} } : undefined,
+        cart: roles.includes(Role.BUYER) ? { create: {} } : undefined,
       },
     });
   }

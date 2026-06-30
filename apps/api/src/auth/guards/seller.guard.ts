@@ -12,8 +12,8 @@ export class SellerGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
-    if (!request.user.roles.includes(Role.SELLER)) {
-      throw new ForbiddenException('Seller role required');
+    if (request.user.activeRole !== Role.SELLER) {
+      throw new ForbiddenException('Seller active role required');
     }
 
     return true;

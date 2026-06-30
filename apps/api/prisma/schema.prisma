@@ -13,13 +13,68 @@ enum Role {
   DRIVER
 }
 
+enum DeliveryMethod {
+  INSTANT
+  NEXT_DAY
+  REGULAR
+}
+
+enum OrderStatus {
+  SEDANG_DIKEMAS
+  MENUNGGU_PENGIRIM
+  SEDANG_DIKIRIM
+  PESANAN_SELESAI
+  DIKEMBALIKAN
+}
+
+enum WalletTransactionType {
+  TOP_UP
+  PAYMENT
+  REFUND
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+}
+
+enum DiscountKind {
+  VOUCHER
+  PROMO
+}
+
+enum DeliveryJobStatus {
+  AVAILABLE
+  TAKEN
+  COMPLETED
+  RETURNED
+}
+
+enum OverdueAction {
+  REFUND
+  RETURN
+}
+
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  username  String   @unique
-  password  String
-  roles     Role[]
-  stores    Store[]
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  username           String              @unique
+  password           String
+  roles              Role[]
+  stores             Store[]
+  wallet             Wallet?
+  addresses          Address[]
+  cart               Cart?
+  buyerOrders        Order[]             @relation("BuyerOrders")
+  driverJobs         DeliveryJob[]       @relation("DriverJobs")
+  walletTransactions WalletTransaction[]
+  driverEarnings     DriverEarning[]
+  reviews            ApplicationReview[]
+  vouchersCreated    Voucher[]           @relation("VoucherCreator")
+  promosCreated      Promo[]             @relation("PromoCreator")
+  adminCreatedBy     User?               @relation("AdminCreator", fields: [adminCreatedById], references: [id])
+  adminCreatedById   String?
+  createdAdmins      User[]              @relation("AdminCreator")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -32,6 +87,8 @@ model Store {
   sellerId    String
   seller      User      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   products    Product[]
+  carts       Cart[]
+  orders      Order[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -48,9 +105,243 @@ model Product {
   stock       Int     @default(0)
   storeId     String
   store       Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([storeId])
+}
+
+model ApplicationReview {
+  id        String   @id @default(uuid())
+  name      String
+  rating    Int
+  category  String
+  comment   String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WalletTransaction {
+  id        String                @id @default(uuid())
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      WalletTransactionType
+  amount    Int
+  note      String?
+  orderId   String?
+  order     Order?                @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdAt DateTime              @default(now())
+
+  @@index([userId, createdAt])
+  @@index([orderId])
+}
+
+model Address {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label       String
+  recipient   String
+  phone       String
+  fullAddress String
+  city        String
+  postalCode  String
+  isDefault   Boolean  @default(false)
+  orders      Order[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  storeId   String?
+  store     Store?     @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([productId])
+}
+
+model Order {
+  id                  String                @id @default(uuid())
+  buyerId             String
+  buyer               User                  @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  storeId             String
+  store               Store                 @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  addressId           String
+  address             Address               @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  status              OrderStatus
+  deliveryMethod      DeliveryMethod
+  subtotal            Int
+  discountAmount      Int                   @default(0)
+  ppnAmount           Int
+  deliveryFee         Int
+  finalTotal          Int
+  discountCode        String?
+  discountKind        DiscountKind?
+  dueAt               DateTime
+  completedAt         DateTime?
+  returnedAt          DateTime?
+  items               OrderItem[]
+  histories           OrderStatusHistory[]
+  deliveryJob         DeliveryJob?
+  walletTransactions  WalletTransaction[]
+  discountRedemptions DiscountRedemption[]
+  overdueLogs         OverdueProcessingLog[]
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  @@index([buyerId, createdAt])
+  @@index([storeId, status])
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  order       Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productName String
+  unitPrice   Int
+  quantity    Int
+  total       Int
+
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(uuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  note      String?
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+model Voucher {
+  id                  String               @id @default(uuid())
+  code                String               @unique
+  type                DiscountType
+  amount              Int
+  remainingUsage      Int
+  expiresAt           DateTime
+  isActive            Boolean              @default(true)
+  createdById         String?
+  createdBy           User?                @relation("VoucherCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  discountRedemptions DiscountRedemption[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model Promo {
+  id                  String               @id @default(uuid())
+  code                String               @unique
+  type                DiscountType
+  amount              Int
+  expiresAt           DateTime
+  isActive            Boolean              @default(true)
+  createdById         String?
+  createdBy           User?                @relation("PromoCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  discountRedemptions DiscountRedemption[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model DiscountRedemption {
+  id        String       @id @default(uuid())
+  orderId   String
+  order     Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  voucherId String?
+  voucher   Voucher?     @relation(fields: [voucherId], references: [id], onDelete: SetNull)
+  promoId   String?
+  promo     Promo?       @relation(fields: [promoId], references: [id], onDelete: SetNull)
+  kind      DiscountKind
+  code      String
+  amount    Int
+  createdAt DateTime     @default(now())
+
+  @@index([orderId])
+  @@index([code])
+}
+
+model DeliveryJob {
+  id        String            @id @default(uuid())
+  orderId   String            @unique
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driverId  String?
+  driver    User?             @relation("DriverJobs", fields: [driverId], references: [id], onDelete: SetNull)
+  status    DeliveryJobStatus @default(AVAILABLE)
+  earning   Int
+  driverEarning DriverEarning?
+  takenAt   DateTime?
+  completedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([status])
+  @@index([driverId])
+}
+
+model DriverEarning {
+  id        String   @id @default(uuid())
+  driverId  String
+  driver    User     @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  jobId     String   @unique
+  job       DeliveryJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  amount    Int
+  createdAt DateTime @default(now())
+
+  @@index([driverId, createdAt])
+}
+
+model SystemClock {
+  id        String   @id @default("default")
+  currentAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OverdueProcessingLog {
+  id        String        @id @default(uuid())
+  orderId   String
+  order     Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  action    OverdueAction
+  note      String?
+  createdAt DateTime      @default(now())
+
+  @@unique([orderId])
+  @@index([createdAt])
 }
