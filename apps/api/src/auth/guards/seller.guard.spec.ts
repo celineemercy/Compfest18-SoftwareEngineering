@@ -5,24 +5,24 @@ import { SellerGuard } from './seller.guard';
 describe('SellerGuard', () => {
   const guard = new SellerGuard();
 
-  function contextWithRoles(roles: Role[]) {
+  function contextWithActiveRole(activeRole?: Role) {
     return {
       switchToHttp: () => ({
         getRequest: () => ({
-          user: { roles },
+          user: { activeRole },
         }),
       }),
     } as ExecutionContext;
   }
 
-  it('allows sellers', () => {
-    expect(guard.canActivate(contextWithRoles([Role.BUYER, Role.SELLER]))).toBe(
+  it('allows active sellers', () => {
+    expect(guard.canActivate(contextWithActiveRole(Role.SELLER))).toBe(
       true,
     );
   });
 
-  it('rejects non-sellers', () => {
-    expect(() => guard.canActivate(contextWithRoles([Role.BUYER]))).toThrow(
+  it('rejects inactive sellers', () => {
+    expect(() => guard.canActivate(contextWithActiveRole(Role.BUYER))).toThrow(
       ForbiddenException,
     );
   });
