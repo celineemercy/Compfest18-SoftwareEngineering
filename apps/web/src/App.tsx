@@ -16,6 +16,7 @@ import {
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DriverDeliveryWorkspace } from '@/components/DriverDeliveryWorkspace'
 import {
   Card,
   CardContent,
@@ -37,6 +38,7 @@ type AuthUser = {
   email: string
   username: string
   roles: Role[]
+  activeRole?: Role
   createdAt?: string
   updatedAt?: string
 }
@@ -405,6 +407,13 @@ function App() {
           </Card>
         </div>
       </section>
+
+      <DriverDeliveryWorkspace
+        token={token}
+        currentUser={currentUser}
+        onToken={setToken}
+        onUser={setCurrentUser}
+      />
 
       <section className="mx-auto grid max-w-7xl gap-8 px-5 py-10 lg:grid-cols-[1fr_0.95fr] lg:px-10">
         <div>
